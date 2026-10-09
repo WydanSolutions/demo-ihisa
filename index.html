@@ -4456,7 +4456,12 @@ async function repMarcarReportado(){
 
 /* ---------- Imprimir ---------- */
 function repImprimir(){
-  if (avisarSiEnMarco('imprimir')) return;
+  /* Abierta como link compartido, el navegador no deja abrir la ventana de impresión.
+     En vez de que el botón no haga nada, se baja el PDF, que es lo que se iba a imprimir. */
+  if (enMarco()){
+    aviso('Acá no puedo abrir la ventana de impresión: te bajo el PDF', { tipo: 'alerta', ms: 5000 });
+    return repPDF();
+  }
   $('#impresion').innerHTML = repHTML();
   pintarIconos($('#impresion'));
   window.print();
@@ -4526,14 +4531,37 @@ function cargarScript(url){
 }
 const nombreArchivo = n => `IHISA - ${n} - ${hoy()}`;
 
-/* ---------- Guardar un archivo ---------- */
-function bajar(blob, nombre){
-  avisarSiEnMarco('bajar el archivo');
+/* ---------- Guardar un archivo ----------
+   Cuando la página se abre normal (doble clic, servidor o GitHub Pages), el archivo se baja
+   como siempre. Cuando se abre como link compartido, el navegador no deja que la página baje
+   archivos por su cuenta: ahí se pide por el canal que ofrece la plataforma, que le muestra a
+   quien está mirando un cartel para confirmar. Si no hay ninguno de los dos, se avisa. */
+let _canalDescargas;
+async function canalDescargas(){
+  if (_canalDescargas !== undefined) return _canalDescargas;
+  try { _canalDescargas = (window.claude && window.claude.use) ? await window.claude.use('downloads') : null; }
+  catch (e) { _canalDescargas = null; }
+  return _canalDescargas;
+}
+async function guardarArchivo(datos, nombre){
+  const canal = await canalDescargas();
+  if (canal){
+    try { await canal.save({ filename: nombre, data: datos }); aviso('Archivo guardado'); }
+    catch (e) {
+      if (e && e.code === 'declined') return;              // dijo que no: no hace falta avisar nada
+      aviso('No se pudo guardar el archivo desde acá.', { tipo: 'error', ms: 6000 });
+    }
+    return;
+  }
+  if (avisarSiEnMarco('bajar el archivo')) return;
+  const blob = datos instanceof Blob ? datos : new Blob([datos]);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = nombre;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 3000);
+  aviso(`Descargado: ${esc(nombre)}`);
 }
+const bajar = (blob, nombre) => guardarArchivo(blob, nombre);
 
 /* ---------- Excel genérico (una tabla) ---------- */
 async function exportarExcel(nombre, columnas, filas){
@@ -4546,9 +4574,8 @@ async function exportarExcel(nombre, columnas, filas){
     hoja['!cols'] = columnas.map(c => ({ wch: Math.max(10, Math.min(42, c.t.length + 6)) }));
     const libro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(libro, hoja, nombre.slice(0, 28));
-    avisarSiEnMarco('bajar la planilla');
-    XLSX.writeFile(libro, nombreArchivo(nombre) + '.xlsx');
-    aviso('Planilla descargada (.xlsx)');
+    const buf = XLSX.write(libro, { type: 'array', bookType: 'xlsx' });
+    await guardarArchivo(new Blob([buf]), nombreArchivo(nombre) + '.xlsx');
   } catch (e) {
     exportarCSV(nombre, datos);
   }
@@ -4556,8 +4583,7 @@ async function exportarExcel(nombre, columnas, filas){
 function exportarCSV(nombre, datos){
   const celda = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const texto = datos.map(f => f.map(celda).join(';')).join('\r\n');
-  bajar(new Blob(['﻿' + texto], { type: 'text/csv;charset=utf-8' }), nombreArchivo(nombre) + '.csv');
-  aviso('Planilla descargada (.csv, se abre con Excel)', { tipo: 'alerta' });
+  guardarArchivo(new Blob(['﻿' + texto], { type: 'text/csv;charset=utf-8' }), nombreArchivo(nombre) + '.csv');
 }
 
 /* =====================================================================
@@ -4585,9 +4611,8 @@ async function repExcel(){
     });
     if (claves.length > 1)
       XLSX.utils.book_append_sheet(libro, hojaReporte(c, filas, rep.desde, rep.hasta), 'TOTAL');
-    avisarSiEnMarco('bajar el reporte');
-    XLSX.writeFile(libro, nombreArchivo(`Reporte ${c.nombre}${rep.contacto ? ' - ' + rep.contacto : ''}`) + '.xlsx');
-    aviso('Reporte descargado (.xlsx)');
+    const buf = XLSX.write(libro, { type: 'array', bookType: 'xlsx' });
+    await guardarArchivo(new Blob([buf]), nombreArchivo(`Reporte ${c.nombre}${rep.contacto ? ' - ' + rep.contacto : ''}`) + '.xlsx');
   } catch (e) {
     /* sin internet: el mismo contenido en una sola tabla .csv */
     const tar = tarifaCliente(rep.clienteId, rep.hasta);
@@ -4695,14 +4720,14 @@ function logoPNG(){
     const sprite = document.querySelector('#ihisa-marca');
     if (!sprite) return ok(null);
     const vb = sprite.getAttribute('viewBox') || '0 30 1000 960';
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" width="600" height="576">
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${vb}" width="300" height="288">
       <g fill="#1D1B42" color="#1D1B42">${sprite.innerHTML.replace(/currentColor/g, '#1D1B42')}</g></svg>`;
     const img = new Image();
     img.onload = () => {
       const cv = document.createElement('canvas');
-      cv.width = 600; cv.height = 576;
+      cv.width = 300; cv.height = 288;
       const cx = cv.getContext('2d');
-      cx.drawImage(img, 0, 0, 600, 576);
+      cx.drawImage(img, 0, 0, 300, 288);
       _logoPNG = cv.toDataURL('image/png');
       ok(_logoPNG);
     };
@@ -4727,7 +4752,7 @@ async function repPDF(){
   const W = doc.internal.pageSize.getWidth();
 
   /* --- Encabezado --- */
-  if (logo) doc.addImage(logo, 'PNG', 12, 8, 26, 25);
+  if (logo) doc.addImage(logo, 'PNG', 12, 8, 26, 25, 'ihisa', 'FAST');
   doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(120);
   doc.text('ORDEN DE TRABAJO:', 44, 14);
   doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(29, 27, 66);
@@ -4828,9 +4853,7 @@ async function repPDF(){
     doc.text(`${e.nombre} · emitido el ${fFecha(hoy())}`, 12, doc.internal.pageSize.getHeight() - 6);
     doc.text(`Página ${i} de ${n}`, W - 12, doc.internal.pageSize.getHeight() - 6, { align: 'right' });
   }
-  avisarSiEnMarco('bajar el PDF');
-  doc.save(nombreArchivo(`Reporte ${c.nombre}${rep.contacto ? ' - ' + rep.contacto : ''}`) + '.pdf');
-  aviso('PDF descargado');
+  await guardarArchivo(doc.output('blob'), nombreArchivo(`Reporte ${c.nombre}${rep.contacto ? ' - ' + rep.contacto : ''}`) + '.pdf');
 }
 
 
@@ -5026,8 +5049,7 @@ function cfDatos(){
   </div>`;
 }
 function bajarRespaldo(){
-  bajar(new Blob([JSON.stringify(D(), null, 1)], { type: 'application/json' }), nombreArchivo('Respaldo') + '.json');
-  aviso('Respaldo descargado');
+  guardarArchivo(new Blob([JSON.stringify(D(), null, 1)], { type: 'application/json' }), nombreArchivo('Respaldo') + '.json');
 }
 function subirRespaldo(inp){
   const f = inp.files && inp.files[0]; if (!f) return;
@@ -5095,6 +5117,9 @@ window.addEventListener('resize', () => { if (Store.usuario) acomodarTablas(); }
 Store.cargar();
 pintarIconos();
 iniciarBuscador();
+/* Se pregunta de entrada si la plataforma ofrece canal de descargas, así el primer
+   botón de Exportar no se queda esperando (ver guardarArchivo en 17-exportar.js). */
+try { canalDescargas(); } catch (e) {}
 
 /* ?web=1 → entra directo al bloqueo (para la página comercial de Wydan);
    sin eso, abre la presentación de Wydan. */
