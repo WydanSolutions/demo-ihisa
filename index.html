@@ -398,10 +398,18 @@ input.con-lista{background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xm
 .bq-fecha{color:rgba(255,255,255,.62);font-size:13.5px;margin-top:2px;text-transform:capitalize}
 .bq-form{margin-top:22px;display:flex;flex-direction:column;gap:10px;text-align:left}
 .bq-campo>span{display:block;font-size:11px;letter-spacing:2.4px;text-transform:uppercase;color:rgba(255,255,255,.6);font-weight:600;margin-bottom:6px}
-.bq-campo input{background:rgba(255,255,255,.1);border:1.5px solid rgba(255,255,255,.2);color:#FFF;min-height:50px;
-  text-align:center;font-size:22px;letter-spacing:8px;font-family:var(--f-titulo)}
-.bq-campo input::placeholder{letter-spacing:8px;color:rgba(255,255,255,.3)}
-.bq-campo input:focus{border-color:var(--naranja);box-shadow:0 0 0 3px rgba(242,140,40,.28);background:rgba(255,255,255,.14)}
+/* OJO con el #bloqueo adelante: sin él gana la regla general de los campos (01-base.css),
+   el casillero queda con fondo blanco y la letra blanca no se ve. Pasó el 09/10/2026. */
+#bloqueo .bq-campo{position:relative}
+#bloqueo .bq-campo input{background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);color:#FFF;
+  min-height:52px;padding-right:48px;text-align:center;font-size:22px;letter-spacing:8px;font-family:var(--f-titulo)}
+#bloqueo .bq-campo input::placeholder{letter-spacing:8px;color:rgba(255,255,255,.45)}
+#bloqueo .bq-campo input:focus{border-color:var(--naranja);box-shadow:0 0 0 3px rgba(242,140,40,.3);background:rgba(255,255,255,.2)}
+/* el ojito para ver lo que se escribe */
+.bq-ver{position:absolute;right:6px;bottom:5px;width:42px;height:42px;display:grid;place-items:center;
+  border-radius:9px;color:rgba(255,255,255,.65)}
+.bq-ver:hover{color:#FFF;background:rgba(255,255,255,.12)}
+.bq-ver .ico{width:20px;height:20px}
 .bq-error{min-height:19px;font-size:13px;color:rgba(255,255,255,.66);text-align:center}
 .bq-error.mal{color:#FFC2C2}
 .bq-error b{color:#FFF;background:rgba(255,255,255,.16);padding:1px 7px;border-radius:5px;letter-spacing:1.5px}
@@ -789,6 +797,7 @@ button.kpi:hover{border-color:var(--marino)}
         <label class="bq-campo">
           <span>Contraseña</span>
           <input id="bq-clave" type="password" inputmode="numeric" autocomplete="current-password" placeholder="••••" aria-describedby="bq-error">
+          <button type="button" class="bq-ver" id="bq-ver" onclick="verClave()" aria-label="Ver la contraseña"><span data-ico="ojo"></span></button>
         </label>
         <div class="bq-error" id="bq-error" role="alert"></div>
         <button class="btn btn-naranja grande ancho" type="submit">Entrar</button>
@@ -928,6 +937,8 @@ const ICONOS = {
   casco:      '<path d="M3 15a9 9 0 0 1 18 0"/><path d="M2 15h20v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/><path d="M9 15V7a3 3 0 0 1 6 0v8"/>',
   ot:         '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   area:       '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  ojo:        '<path d="M1.5 12S5 5.5 12 5.5 22.5 12 22.5 12 19 18.5 12 18.5 1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3.2"/>',
+  ojoNo:      '<path d="M9.9 5.7A9.8 9.8 0 0 1 12 5.5c7 0 10.5 6.5 10.5 6.5a17 17 0 0 1-3.6 4.4M6.6 6.6A17 17 0 0 0 1.5 12S5 18.5 12 18.5c1.6 0 3-.3 4.2-.8"/><path d="M9.8 9.8a3.2 3.2 0 0 0 4.4 4.4M2 2l20 20"/>',
 };
 function ico(n, cls){
   return `<svg class="ico ${cls || ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONOS[n] || ''}</svg>`;
@@ -2270,9 +2281,20 @@ function mostrarBloqueo(){
   $('#bq-error').innerHTML = MODO_DEMO ? `Contraseña de la demostración: <b>${CLAVE_DEMO}</b>` : '';
   $('#bq-error').classList.remove('mal');
   $('#bq-clave').value = '';
+  $('#bq-clave').type = 'password';
+  $('#bq-ver').innerHTML = ico('ojo');
   $('#app').classList.add('hidden'); $('#modal').classList.add('hidden');
   $('#bloqueo').classList.remove('hidden', 'saliendo');
   if (!esCelular()) setTimeout(() => $('#bq-clave').focus(), 220);
+}
+/* Mostrar u ocultar lo que se escribe (en la demo la contraseña está a la vista igual) */
+function verClave(){
+  const i = $('#bq-clave'), b = $('#bq-ver');
+  const ver = i.type === 'password';
+  i.type = ver ? 'text' : 'password';
+  b.innerHTML = ico(ver ? 'ojoNo' : 'ojo');
+  b.setAttribute('aria-label', ver ? 'Ocultar la contraseña' : 'Ver la contraseña');
+  i.focus();
 }
 function validarClave(){
   const v = ($('#bq-clave').value || '').trim();
