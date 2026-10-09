@@ -90,7 +90,26 @@
     --h-descanso:#DEA0E8; --h-descanso-bg:rgba(222,160,232,.15);
   }
 }
-:root[data-theme="dark"]{ color-scheme: dark; --fondo:#0E0D1E; --superficie:#191836; --superficie-2:#1F1E42; --borde:#343262; --texto:#E8E9F2; --texto-2:#A9AFC4; --titulo:#D6D9EC; }
+/* Lo mismo, pero cuando se eligió «Oscuro» a mano desde la página.
+   OJO: tiene que repetir TODOS los colores de arriba. Si falta alguno queda a medio camino
+   (por ejemplo un borde claro sobre un fondo oscuro). */
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --fondo:#0E0D1E; --superficie:#191836; --superficie-2:#1F1E42; --superficie-3:#262550;
+  --borde:#343262; --borde-2:#2A2854; --texto:#E8E9F2; --texto-2:#A9AFC4; --texto-3:#7E85A0;
+  --titulo:#D6D9EC; --acero-claro:#2A2854;
+  --sombra:0 1px 2px rgba(0,0,0,.35),0 4px 14px rgba(0,0,0,.3); --sombra-2:0 20px 50px rgba(0,0,0,.6);
+  --ok:#5FD09B; --ok-bg:rgba(95,208,155,.14); --alerta:#F4C04E; --alerta-bg:rgba(244,192,78,.14);
+  --critico:#FF7B7B; --critico-bg:rgba(255,123,123,.14); --info:#9DB2F0; --info-bg:rgba(157,178,240,.14);
+  --e-pendiente:#A9AFC4; --e-pendiente-bg:rgba(169,175,196,.13);
+  --e-curso:#9DB2F0;     --e-curso-bg:rgba(157,178,240,.15);
+  --e-terminado:#5FD09B; --e-terminado-bg:rgba(95,208,155,.14);
+  --e-reportado:#F4C04E; --e-reportado-bg:rgba(244,192,78,.14);
+  --e-facturado:#BBAEF5; --e-facturado-bg:rgba(187,174,245,.15);
+  --h-comun:#9DB2F0; --h-comun-bg:rgba(157,178,240,.15);
+  --h-extra:#FFAE62; --h-extra-bg:rgba(255,174,98,.15);
+  --h-descanso:#DEA0E8; --h-descanso-bg:rgba(222,160,232,.15);
+}
 
 /* Cada estado y cada tipo de hora toma su color con una clase */
 .e-pendiente{--ec:var(--e-pendiente);--ecb:var(--e-pendiente-bg)} .e-curso{--ec:var(--e-curso);--ecb:var(--e-curso-bg)}
@@ -594,6 +613,12 @@ button.kpi:hover{border-color:var(--marino)}
   .kpi-v{font-size:21px} .tira-estados{grid-template-columns:repeat(2,1fr)}
 }
 
+/* ---------- Elegir claro u oscuro (menú lateral) ---------- */
+.lat-tema{display:flex;align-items:center;justify-content:center;gap:8px;padding:8px;border-radius:10px;
+  color:rgba(255,255,255,.65);font-size:12.5px;font-weight:600;width:100%}
+.lat-tema:hover{background:rgba(255,255,255,.08);color:#FFF}
+.lat-tema .ico{width:16px;height:16px}
+
 
 /* ===== css/04-secciones.css ===== */
 /* ================================================================
@@ -818,6 +843,7 @@ button.kpi:hover{border-color:var(--marino)}
     <nav class="lat-nav" id="lat-nav" aria-label="Secciones"></nav>
     <div class="lat-pie">
       <div class="lat-usuario" id="lat-usuario"></div>
+      <button class="lat-tema" id="btn-tema" onclick="cambiarTema()" aria-label="Colores"></button>
       <button class="lat-bloquear" onclick="bloquear()"><span data-ico="candado"></span> Bloquear</button>
       <div class="lat-wydan"><img id="lat-wydan" alt=""><span>Desarrollado por <b>WYDAN</b></span></div>
       <button class="lat-inicio" onclick="mostrarBienvenida()">⇦ Ver la presentación</button>
@@ -937,6 +963,8 @@ const ICONOS = {
   casco:      '<path d="M3 15a9 9 0 0 1 18 0"/><path d="M2 15h20v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/><path d="M9 15V7a3 3 0 0 1 6 0v8"/>',
   ot:         '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/>',
   area:       '<path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v8"/>',
+  sol:        '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  luna:       '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   ojo:        '<path d="M1.5 12S5 5.5 12 5.5 22.5 12 22.5 12 19 18.5 12 18.5 1.5 12 1.5 12z"/><circle cx="12" cy="12" r="3.2"/>',
   ojoNo:      '<path d="M9.9 5.7A9.8 9.8 0 0 1 12 5.5c7 0 10.5 6.5 10.5 6.5a17 17 0 0 1-3.6 4.4M6.6 6.6A17 17 0 0 0 1.5 12S5 18.5 12 18.5c1.6 0 3-.3 4.2-.8"/><path d="M9.8 9.8a3.2 3.2 0 0 0 4.4 4.4M2 2l20 20"/>',
 };
@@ -2396,6 +2424,7 @@ function pintarNav(){
     return `<button class="${s.id === seccion ? 'on' : ''}" onclick="irA('${s.id}')">${ico(s.ico)}<span>${s.t.slice(0, 11)}</span>${n[s.id] ? `<i>${n[s.id]}</i>` : ''}</button>`;
   }).join('') + `<button class="${EN_BARRA.includes(seccion) ? '' : 'on'}" onclick="abrirMas()">${ico('menu')}<span>Más</span></button>`;
   pintarIconos($('#lateral')); pintarIconos($('#barra-inf'));
+  aplicarTema();
 
   const s = SECCIONES.find(x => x.id === seccion);
   $('#enc-fecha').textContent = fLarga(hoy());
@@ -2442,6 +2471,7 @@ function abrirMas(){
   abrirHoja(`<div class="hoja-cab"><b>Más</b><button class="icon-btn" onclick="cerrarHoja()">${ico('x')}</button></div>
     <div class="mas-lista">${resto.map(s => `<button onclick="cerrarHoja(); irA('${s.id}')">${ico(s.ico)}<span>${s.t}</span></button>`).join('')}
       <button onclick="cerrarHoja(); mostrarBienvenida()">${ico('atras')}<span>Ver la presentación</span></button>
+      <button onclick="cambiarTema()">${ico((TEMAS.find(x => x.id === temaElegido()) || TEMAS[0]).ico)}<span>Colores: ${(TEMAS.find(x => x.id === temaElegido()) || TEMAS[0]).t.toLowerCase()}</span></button>
       <button onclick="cerrarHoja(); bloquear()">${ico('candado')}<span>Bloquear</span></button></div>
     <div class="mas-usuario">${esc((Store.usuario || USUARIO_DEMO).nombre)} · Desarrollado por <b>WYDAN</b></div>`);
 }
@@ -5110,11 +5140,59 @@ function alPintar(){ acomodarTablas(); }
 window.addEventListener('resize', () => { if (Store.usuario) acomodarTablas(); });
 
 
+/* ===== js/20-tema.js ===== */
+/* =====================================================================
+   CLARO U OSCURO
+   Por defecto la página se adapta al modo del dispositivo (si el celular
+   o la computadora están en modo oscuro, la página se pone oscura).
+   Quien la usa puede fijarla en claro o en oscuro desde el menú.
+
+   La elección es de cada dispositivo, así que se guarda aparte de los
+   datos: no tiene sentido que lo que elige uno le cambie el color a otro.
+   ===================================================================== */
+const CLAVE_TEMA = CLAVE_GUARDADO + '_tema';
+const TEMAS = [
+  { id: 'auto',   t: 'Según el dispositivo', ico: 'config' },
+  { id: 'claro',  t: 'Siempre claro',        ico: 'sol' },
+  { id: 'oscuro', t: 'Siempre oscuro',       ico: 'luna' },
+];
+function temaElegido(){
+  try { return localStorage.getItem(CLAVE_TEMA) || 'auto'; } catch (e) { return 'auto'; }
+}
+function aplicarTema(){
+  const t = temaElegido();
+  const raiz = document.documentElement;
+  if (t === 'claro') raiz.setAttribute('data-theme', 'light');
+  else if (t === 'oscuro') raiz.setAttribute('data-theme', 'dark');
+  else raiz.removeAttribute('data-theme');
+  const b = $('#btn-tema');
+  if (b){
+    const o = TEMAS.find(x => x.id === t) || TEMAS[0];
+    b.innerHTML = ico(o.ico) + `<span>${o.t}</span>`;
+    b.setAttribute('aria-label', 'Colores: ' + o.t);
+  }
+}
+/* Va pasando por las tres opciones: según el dispositivo → claro → oscuro */
+function cambiarTema(){
+  const i = TEMAS.findIndex(x => x.id === temaElegido());
+  const sig = TEMAS[(i + 1) % TEMAS.length];
+  try { localStorage.setItem(CLAVE_TEMA, sig.id); } catch (e) {}
+  aplicarTema();
+  aviso('Colores: ' + sig.t.toLowerCase());
+  if (!$('#hoja').classList.contains('hidden')) abrirMas();
+}
+/* Si está en «según el dispositivo» y el dispositivo cambia (de día a noche), acompaña */
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (temaElegido() === 'auto') aplicarTema();
+});
+
+
 /* ===== js/99-app.js ===== */
 /* =====================================================================
    ARRANQUE (siempre último)
    ===================================================================== */
 Store.cargar();
+aplicarTema();
 pintarIconos();
 iniciarBuscador();
 /* Se pregunta de entrada si la plataforma ofrece canal de descargas, así el primer
