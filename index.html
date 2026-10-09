@@ -1281,6 +1281,18 @@ const iniciales = n => String(n || '?').split(' ').filter(Boolean).map(p => p[0]
 const nombreCorto = n => { const p = String(n || '').split(' '); return p.length > 1 ? p[0] + ' ' + p[1][0] + '.' : p[0]; };
 const primerNombre = n => String(n || '').split(' ')[0];
 
+/* ---------- Vista previa incrustada ----------
+   Si la página se abre dentro de un <iframe> (una vista previa de las que se comparten por
+   link), el navegador BLOQUEA las descargas y la ventana de impresión: el botón no haría
+   nada y parecería roto. Se avisa qué hacer en vez de dejarlo mudo. */
+function enMarco(){ try { return window.top !== window.self; } catch (e) { return true; } }
+function avisarSiEnMarco(que){
+  if (!enMarco()) return false;
+  aviso(`Para ${que} abrí la página en su propia pestaña (en la vista previa el navegador no lo permite).`,
+    { tipo: 'alerta', ms: 7000 });
+  return true;
+}
+
 
 /* ===== js/03-lista.js ===== */
 /*
@@ -4444,11 +4456,13 @@ async function repMarcarReportado(){
 
 /* ---------- Imprimir ---------- */
 function repImprimir(){
+  if (avisarSiEnMarco('imprimir')) return;
   $('#impresion').innerHTML = repHTML();
   pintarIconos($('#impresion'));
   window.print();
 }
 function imprimirParte(id){
+  if (avisarSiEnMarco('imprimir')) return;
   const p = Store.obtener('partes', id); if (!p) return;
   const t = totalesParte(p);
   const e = cfg().empresa;
@@ -4514,6 +4528,7 @@ const nombreArchivo = n => `IHISA - ${n} - ${hoy()}`;
 
 /* ---------- Guardar un archivo ---------- */
 function bajar(blob, nombre){
+  avisarSiEnMarco('bajar el archivo');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = nombre;
   document.body.appendChild(a); a.click(); a.remove();
@@ -4531,6 +4546,7 @@ async function exportarExcel(nombre, columnas, filas){
     hoja['!cols'] = columnas.map(c => ({ wch: Math.max(10, Math.min(42, c.t.length + 6)) }));
     const libro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(libro, hoja, nombre.slice(0, 28));
+    avisarSiEnMarco('bajar la planilla');
     XLSX.writeFile(libro, nombreArchivo(nombre) + '.xlsx');
     aviso('Planilla descargada (.xlsx)');
   } catch (e) {
@@ -4569,6 +4585,7 @@ async function repExcel(){
     });
     if (claves.length > 1)
       XLSX.utils.book_append_sheet(libro, hojaReporte(c, filas, rep.desde, rep.hasta), 'TOTAL');
+    avisarSiEnMarco('bajar el reporte');
     XLSX.writeFile(libro, nombreArchivo(`Reporte ${c.nombre}${rep.contacto ? ' - ' + rep.contacto : ''}`) + '.xlsx');
     aviso('Reporte descargado (.xlsx)');
   } catch (e) {
@@ -4811,6 +4828,7 @@ async function repPDF(){
     doc.text(`${e.nombre} · emitido el ${fFecha(hoy())}`, 12, doc.internal.pageSize.getHeight() - 6);
     doc.text(`Página ${i} de ${n}`, W - 12, doc.internal.pageSize.getHeight() - 6, { align: 'right' });
   }
+  avisarSiEnMarco('bajar el PDF');
   doc.save(nombreArchivo(`Reporte ${c.nombre}${rep.contacto ? ' - ' + rep.contacto : ''}`) + '.pdf');
   aviso('PDF descargado');
 }
