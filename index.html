@@ -639,6 +639,10 @@ button.kpi:hover{border-color:var(--marino)}
 .lat-tema:hover{background:rgba(255,255,255,.08);color:#FFF}
 .lat-tema .ico{width:16px;height:16px}
 
+/* ---------- Gráfico de dos barras (entró / salió) ---------- */
+.g-par{display:flex;align-items:flex-end;gap:4px;width:100%;justify-content:center;flex:1;min-height:0}
+.g-par .g-mini{width:min(26px,34%)}
+
 
 /* ===== css/04-secciones.css ===== */
 /* ================================================================
@@ -768,6 +772,10 @@ button.kpi:hover{border-color:var(--marino)}
   .tabla.col1-fija tr.grupo td:first-child{background:var(--superficie-3)}
   .tabla.col1-fija tbody tr:hover td:first-child{background:var(--superficie-2)}
 }
+
+/* ---------- Filas del parte que caen en día de descanso ---------- */
+.fila-descanso td{background:var(--h-descanso-bg)}
+.fila-descanso td:first-child{box-shadow:inset 3px 0 0 var(--h-descanso)}
 
 
 /* ===== css/05-impresion.css ===== */
@@ -1552,7 +1560,8 @@ function avisarSiEnMarco(que){
    ##################################################################### */
 
 /* Colecciones (cada una sería una colección en la base de datos real) */
-const COLECCIONES = ['clientes', 'tiposTrabajo', 'funcionarios', 'partes', 'marcas', 'adelantos', 'cobros', 'cuadrillas', 'log'];
+const COLECCIONES = ['clientes', 'proveedores', 'tiposTrabajo', 'funcionarios', 'partes', 'marcas',
+  'adelantos', 'cobros', 'gastos', 'cuadrillas', 'log'];
 
 const Store = {
   data: null,
@@ -1621,6 +1630,8 @@ const Store = {
 const D = () => Store.data;
 const cfg = () => Store.data.config;
 const clienteDe = id => Store.obtener('clientes', id);
+const provDe = id => Store.obtener('proveedores', id);
+const nombreProv = id => { const p = provDe(id); return p ? p.nombre : '—'; };
 const funcDe = id => Store.obtener('funcionarios', id);
 const tipoDe = id => Store.obtener('tiposTrabajo', id);
 const nombreFunc = id => { const f = funcDe(id); return f ? f.nombre : 'Sin asignar'; };
@@ -1633,7 +1644,7 @@ const funcActivos = () => Store.listar('funcionarios', f => f.activo !== false);
 const tiposActivos = () => Store.listar('tiposTrabajo', t => t.activo !== false);
 
 /* ---------- Configuración que el cliente puede cambiar desde la pantalla ---------- */
-const VERSION_DATOS = 6;
+const VERSION_DATOS = 7;
 function configPorDefecto(){
   return {
     empresa: {
@@ -1744,12 +1755,31 @@ function totalesDe(partes){
   return { horas, subtotal, iva, total: redondear(subtotal + iva), porTipo, cant: partes.length };
 }
 
+/* ---------- La fecha de cada fila ----------
+   Un trabajo puede durar varios días y no siempre con la misma gente: por eso CADA FILA
+   tiene su fecha. Si no la tiene (partes cargados antes), vale la del parte. */
+const fechaFila = (f, p) => f.fecha || (p && p.fecha) || '';
+/* El día en que terminó: el que se puso a mano o el último día cargado */
+function finDeParte(p){
+  if (p.fechaFin) return p.fechaFin;
+  const d = (p.filas || []).map(f => fechaFila(f, p)).filter(Boolean).sort();
+  return d.length ? d[d.length - 1] : p.fecha;
+}
+function inicioDeParte(p){
+  const d = (p.filas || []).map(f => fechaFila(f, p)).filter(Boolean).sort();
+  return d.length && d[0] < p.fecha ? d[0] : p.fecha;
+}
+/* Los días que tiene cargado un trabajo, en orden */
+const diasDeParte = p => [...new Set((p.filas || []).map(f => fechaFila(f, p)).filter(Boolean))].sort();
+
 /* ---------- Buscar partes ---------- */
 function partesEntre(desde, hasta, filtro){
-  return Store.listar('partes', p => p.fecha >= desde && p.fecha <= hasta && (!filtro || filtro(p)))
+  /* un trabajo de varios días entra si CUALQUIERA de sus días cae en el período */
+  return Store.listar('partes', p => inicioDeParte(p) <= hasta && finDeParte(p) >= desde && (!filtro || filtro(p)))
     .sort((a, b) => a.fecha < b.fecha ? 1 : (a.fecha > b.fecha ? -1 : 0));
 }
-const partesDelDia = f => Store.listar('partes', p => p.fecha === f);
+const partesDelDia = f => Store.listar('partes', p =>
+  (p.filas || []).length ? (p.filas || []).some(x => fechaFila(x, p) === f) : p.fecha === f);
 const partesDeSemana = f => partesEntre(inicioSemana(f), finSemana(f));
 const partesDelMes = clave => partesEntre(clave + '-01', clave + '-31');
 
@@ -1759,7 +1789,9 @@ function filasEntre(desde, hasta, filtro){
   const out = [];
   partesEntre(desde, hasta).forEach(p => {
     (p.filas || []).forEach(f => {
-      const fila = { ...f, parte: p, fecha: p.fecha, clienteId: p.clienteId, contacto: p.contacto,
+      const dia = fechaFila(f, p);
+      if (dia < desde || dia > hasta) return;            // cada fila cuenta en SU día
+      const fila = { ...f, parte: p, fecha: dia, clienteId: p.clienteId, contacto: p.contacto,
         area: p.area, tipoId: p.tipoId, actividad: p.actividad, ot: p.ot, estado: p.estado,
         horasCalc: horasFila(f), totalCalc: totalFila(f), tipoHora: f.tipoHora || 'comun' };
       if (!filtro || filtro(fila)) out.push(fila);
@@ -1888,7 +1920,7 @@ function cambiarEstadoParte(parteId, estado){
 /* ---------- Crear y copiar partes ---------- */
 function nuevaFila(funcId, fecha, clienteId, tipoHora){
   const t = tipoHora || tipoHoraPorFecha(fecha);
-  return { id: nuevoId('fil'), funcId, entrada: JORNADA.entrada, salida: JORNADA.salida,
+  return { id: nuevoId('fil'), funcId, fecha, obs: '', entrada: JORNADA.entrada, salida: JORNADA.salida,
     horas: '', tipoHora: t, pu: precioHora(clienteId, fecha, t), descuento: 0 };
 }
 function crearParte(datos){
@@ -1907,7 +1939,7 @@ function copiarParte(parteId, fechaNueva){
   const tipoDef = tipoHoraPorFecha(fechaNueva);
   const filas = (p.filas || []).map(f => {
     const th = (f.tipoHora === 'extra') ? 'extra' : tipoDef;
-    return { ...f, id: nuevoId('fil'), tipoHora: th, pu: precioHora(p.clienteId, fechaNueva, th) };
+    return { ...f, id: nuevoId('fil'), fecha: fechaNueva, tipoHora: th, pu: precioHora(p.clienteId, fechaNueva, th) };
   });
   return crearParte({ ...p, id: undefined, fecha: fechaNueva, estado: 'curso', filas,
     reportadoEn: undefined, facturadoEn: undefined });
@@ -1947,6 +1979,106 @@ function avisos(){
   if (ade.length) a.push({ tipo: 'normal', ico: 'plata', t: `${ade.length} adelanto${ade.length > 1 ? 's' : ''} este mes`,
     s: `${pesos(sumar(ade, x => x.monto))} para descontar`, js: `irA('funcionarios','adelantos')` });
   return a;
+}
+
+
+/* ===== js/05b-cuentas.js ===== */
+/* =====================================================================
+   CUENTAS Y FINANZAS (reglas)
+   Lo que entra (las facturas que se le cobran al cliente) y lo que sale
+   (las compras y los gastos). Acá están las cuentas; la pantalla no hace
+   cuentas por su lado.
+   ===================================================================== */
+
+/* ---------- Gastos ---------- */
+function estadoGasto(g){
+  if (g.estado === 'pagado') return 'pagado';
+  return (g.vence && g.vence < hoy()) ? 'vencido' : 'pendiente';
+}
+const ESTADOS_GASTO = [
+  { id: 'pendiente', nombre: 'Pendiente de pago', color: 'c-pendiente' },
+  { id: 'pagado',    nombre: 'Pagado',            color: 'c-cobrado' },
+  { id: 'vencido',   nombre: 'Vencido',           color: 'c-vencido' },
+];
+const etqGasto = g => { const e = estadoGasto(g), o = ESTADOS_GASTO.find(x => x.id === e); return `<span class="etq ${o.color}">${o.nombre}</span>`; };
+
+const gastos = filtro => Store.listar('gastos', filtro).sort((a, b) => a.fecha < b.fecha ? 1 : -1);
+const gastosEntre = (desde, hasta, filtro) =>
+  gastos(g => g.fecha >= desde && g.fecha <= hasta && (!filtro || filtro(g)));
+/* Lo que salió de caja en el mes: por FECHA DE PAGO, no por la fecha de la factura */
+const pagadoEntre = (desde, hasta) =>
+  gastos(g => g.estado === 'pagado' && g.fechaPago >= desde && g.fechaPago <= hasta);
+
+const aPagar = () => redondear(sumar(gastos(g => estadoGasto(g) !== 'pagado'), g => Number(g.total) || 0));
+const vencidoProv = () => redondear(sumar(gastos(g => estadoGasto(g) === 'vencido'), g => Number(g.total) || 0));
+const categoriasGasto = () => {
+  const guardadas = D().categoriasGasto || [];
+  const usadas = [...new Set(gastos().map(g => g.categoria).filter(Boolean))];
+  return [...new Set([...guardadas, ...usadas])].sort();
+};
+
+/* ---------- Estado de cuenta de un CLIENTE ----------
+   Un renglón por factura (debe) y uno por cobro (haber), con el saldo corriendo. */
+function cuentaCliente(clienteId){
+  const movs = [];
+  cobrosDe(c => c.clienteId === clienteId).forEach(c => {
+    movs.push({ fecha: c.fecha, tipo: 'factura', doc: c.factura || '—', detalle: c.concepto,
+      debe: Number(c.total) || 0, haber: 0, ref: c.id, vence: c.vence, estado: estadoCobro(c) });
+    if (c.estado === 'cobrado' && c.fechaCobro)
+      movs.push({ fecha: c.fechaCobro, tipo: 'cobro', doc: c.medio || 'Cobro',
+        detalle: `Cobro de ${c.factura || c.concepto}`, debe: 0, haber: Number(c.total) || 0, ref: c.id });
+  });
+  movs.sort((a, b) => a.fecha < b.fecha ? -1 : (a.fecha > b.fecha ? 1 : (a.tipo === 'factura' ? -1 : 1)));
+  let saldo = 0;
+  movs.forEach(m => { saldo = redondear(saldo + m.debe - m.haber); m.saldo = saldo; });
+  return { movs, saldo, facturado: redondear(sumar(movs, m => m.debe)), cobrado: redondear(sumar(movs, m => m.haber)) };
+}
+
+/* ---------- Estado de cuenta de un PROVEEDOR ---------- */
+function cuentaProveedor(provId){
+  const movs = [];
+  gastos(g => g.proveedorId === provId).forEach(g => {
+    movs.push({ fecha: g.fecha, tipo: 'compra', doc: g.factura || '—', detalle: g.concepto,
+      debe: Number(g.total) || 0, haber: 0, ref: g.id, vence: g.vence, estado: estadoGasto(g) });
+    if (g.estado === 'pagado' && g.fechaPago)
+      movs.push({ fecha: g.fechaPago, tipo: 'pago', doc: g.medio || 'Pago',
+        detalle: `Pago de ${g.factura || g.concepto}`, debe: 0, haber: Number(g.total) || 0, ref: g.id });
+  });
+  movs.sort((a, b) => a.fecha < b.fecha ? -1 : (a.fecha > b.fecha ? 1 : (a.tipo === 'compra' ? -1 : 1)));
+  let saldo = 0;
+  movs.forEach(m => { saldo = redondear(saldo + m.debe - m.haber); m.saldo = saldo; });
+  return { movs, saldo, comprado: redondear(sumar(movs, m => m.debe)), pagado: redondear(sumar(movs, m => m.haber)) };
+}
+const saldoProveedor = id => redondear(sumar(gastos(g => g.proveedorId === id && estadoGasto(g) !== 'pagado'), g => Number(g.total) || 0));
+
+/* ---------- El mes en números ----------
+   Entró = lo que se cobró de verdad (por fecha de cobro).
+   Salió = lo que se pagó de verdad (por fecha de pago).
+   Así el resultado es plata, no papeles. */
+function finanzasMes(mes){
+  const d = mes + '-01', h = mes + '-31';
+  const cobrado = cobrosDe(c => c.estado === 'cobrado' && (c.fechaCobro || '') >= d && (c.fechaCobro || '') <= h);
+  const pagados = pagadoEntre(d, h);
+  const facturado = cobrosDe(c => c.fecha >= d && c.fecha <= h);
+  const comprado = gastosEntre(d, h);
+  const entro = redondear(sumar(cobrado, c => c.total));
+  const salio = redondear(sumar(pagados, g => g.total));
+  const porCat = {};
+  pagados.forEach(g => { const k = g.categoria || 'Otros'; porCat[k] = redondear((porCat[k] || 0) + (Number(g.total) || 0)); });
+  return {
+    mes, entro, salio, resultado: redondear(entro - salio),
+    facturado: redondear(sumar(facturado, c => c.total)),
+    comprado: redondear(sumar(comprado, g => g.total)),
+    ivaVentas: redondear(sumar(facturado, c => c.iva)),
+    ivaCompras: redondear(sumar(comprado, g => g.iva)),
+    cobros: cobrado, pagos: pagados, porCat,
+  };
+}
+/* Los últimos N meses, del más viejo al más nuevo */
+function finanzasUltimos(n){
+  const l = [];
+  for (let i = n - 1; i >= 0; i--) l.push(finanzasMes(mesDe(sumarMeses(hoy(), -i))));
+  return l;
 }
 
 
@@ -2016,6 +2148,20 @@ function crearDatosEjemplo(){
     tarifas: [{ id: 't1', desde: sumarDias(base, -270), comun: 1050, extra: 1575, descanso: 1575 }],
   };
   const clientes = [dank, forestal, frigo];
+
+  /* ---------------- Proveedores (inventados, del rubro) ---------------- */
+  const PR = (id, nombre, rubro, rut, tel, dias) => ({
+    id, nombre, razon: nombre, rubro, rut, telefono: tel, email: '',
+    contacto: '', diasPago: dias, activo: true,
+  });
+  const proveedores = [
+    PR('pr_sold', 'Soldaduras del Norte', 'Electrodos, gases y consumibles', '21 440 118 0019', '4622 3310', 30),
+    PR('pr_acer', 'Aceros Rivera', 'Chapas, perfiles y hierro', '21 388 702 0014', '4622 9080', 30),
+    PR('pr_ancap', 'Estación Ancap Rivera', 'Combustible', '21 100 003 0019', '4622 1200', 0),
+    PR('pr_herr', 'Herramientas Pereira', 'Herramientas y equipos', '21 771 265 0016', '099 442 118', 15),
+    PR('pr_segu', 'Seguridad Industrial Rivera', 'Elementos de protección', '21 559 840 0013', '4623 4411', 30),
+    PR('pr_tall', 'Taller Mecánico MMR', 'Mantenimiento de la camioneta', '21 602 334 0017', '099 318 555', 0),
+  ];
 
   /* ---------------- Tipos de trabajo ---------------- */
   const T = (id, nombre, categoria, color) => ({ id, nombre, categoria, color, activo: true });
@@ -2280,11 +2426,59 @@ function crearDatosEjemplo(){
   if (pend[0]) pend[0].vence = sumarDias(base, -9);
   if (pend[1]) pend[1].vence = sumarDias(base, 4);
 
+  /* ---------------- Gastos ----------------
+     Tres meses de compras del rubro, con su IVA. Montos inventados. */
+  const CAT = ['Materiales e insumos', 'Herramientas y equipos', 'Combustible y traslados',
+    'BPS / DGI', 'Servicios', 'Alquiler', 'Otros'];
+  const COMPRAS = [
+    ['pr_sold', 'Materiales e insumos', 'Electrodos 6013 y 7018, discos de corte', 9000, 26000],
+    ['pr_sold', 'Materiales e insumos', 'Recarga de oxígeno y acetileno', 7000, 14000],
+    ['pr_acer', 'Materiales e insumos', 'Perfiles UPN y planchuelas', 18000, 62000],
+    ['pr_acer', 'Materiales e insumos', 'Chapa antideslizante para pasarela', 15000, 48000],
+    ['pr_ancap', 'Combustible y traslados', 'Gasoil de la camioneta', 6000, 13000],
+    ['pr_herr', 'Herramientas y equipos', 'Amoladora angular 7\" y repuestos', 8000, 19000],
+    ['pr_segu', 'Otros', 'Caretas fotosensibles y guantes de descarne', 6000, 17000],
+    ['pr_tall', 'Servicios', 'Service de la camioneta', 5000, 12000],
+  ];
+  const gastos = [];
+  for (let m = 3; m >= 0; m--){
+    const mes = mesDe(sumarMeses(base, -m));
+    COMPRAS.forEach((c, i) => {
+      if (m > 0 && aVeces(.25)) return;                 // no todos los meses se compra de todo
+      const dia = entre(2, 26);
+      const fecha = `${mes}-${String(dia).padStart(2, '0')}`;
+      if (fecha > base) return;
+      const sub = entre(c[3], c[4]);
+      const iva = Math.round(sub * 22 / 100);
+      const prov = proveedores.find(p => p.id === c[0]);
+      const vence = prov.diasPago ? sumarDias(fecha, prov.diasPago) : fecha;
+      const pagado = vence <= base ? true : aVeces(.3);
+      gastos.push({
+        id: nuevoId('gas'), fecha, proveedorId: c[0], categoria: c[1], concepto: c[2],
+        factura: 'A-' + entre(1000, 9999), subtotal: sub, iva, total: sub + iva,
+        vence, estado: pagado ? 'pagado' : 'pendiente',
+        fechaPago: pagado ? vence : '', medio: pagado ? unoDe(MEDIOS_COBRO) : '', nota: '',
+      });
+    });
+    /* los fijos de todos los meses */
+    const d1 = `${mes}-05`;
+    if (d1 <= base) gastos.push({ id: nuevoId('gas'), fecha: d1, proveedorId: '', categoria: 'Alquiler',
+      concepto: 'Alquiler del galpón', factura: '', subtotal: 32000, iva: 7040, total: 39040,
+      vence: d1, estado: 'pagado', fechaPago: d1, medio: 'Transferencia', nota: '' });
+    const d2 = `${mes}-20`;
+    if (d2 <= base) gastos.push({ id: nuevoId('gas'), fecha: d2, proveedorId: '', categoria: 'BPS / DGI',
+      concepto: 'Aportes BPS del mes', factura: '', subtotal: entre(78000, 96000), iva: 0, total: 0,
+      vence: d2, estado: d2 < base ? 'pagado' : 'pendiente', fechaPago: d2 < base ? d2 : '',
+      medio: d2 < base ? 'Transferencia' : '', nota: '' });
+  }
+  gastos.forEach(g => { if (!g.total) g.total = g.subtotal + g.iva; });
+
   /* ---------------- Listo ---------------- */
   return {
     version: VERSION_DATOS, base,
     config: configPorDefecto(),
-    clientes, tiposTrabajo, funcionarios, cuadrillas, partes, marcas, adelantos, cobros,
+    clientes, proveedores, tiposTrabajo, funcionarios, cuadrillas, partes, marcas, adelantos, cobros, gastos,
+    categoriasGasto: CAT,
     log: [{ id: nuevoId('log'), fecha: ahora(), usuario: 'Sistema', accion: 'Datos de ejemplo cargados', ref: '' }],
   };
 }
@@ -2396,13 +2590,14 @@ setInterval(() => {
 const SECCIONES = [
   { id: 'panel',        t: 'Panel',        ico: 'panel',        titulo: '' },
   { id: 'trabajos',     t: 'Trabajos',     ico: 'trabajos',     titulo: 'Trabajos · partes diarios' },
-  { id: 'clientes',     t: 'Clientes',     ico: 'clientes',     titulo: 'Clientes' },
+  { id: 'clientes',     t: 'Clientes y proveedores', ico: 'clientes', titulo: 'Clientes y proveedores' },
   { id: 'funcionarios', t: 'Funcionarios', ico: 'funcionarios', titulo: 'Funcionarios y horas' },
   { id: 'cobros',       t: 'Cobros',       ico: 'cobros',       titulo: 'Cobros' },
+  { id: 'finanzas',     t: 'Finanzas',     ico: 'plata',        titulo: 'Finanzas' },
   { id: 'reportes',     t: 'Reportes',     ico: 'reportes',     titulo: 'Reportes' },
   { id: 'config',       t: 'Configuración',ico: 'config',       titulo: 'Configuración' },
 ];
-const EN_BARRA = ['panel', 'trabajos', 'funcionarios', 'cobros'];   // las 4 del celular + "Más"
+const EN_BARRA = ['panel', 'trabajos', 'funcionarios', 'finanzas'];   // las 4 del celular + "Más"
 
 let seccion = 'panel';
 let subSeccion = {};          // la pestaña elegida dentro de cada sección
@@ -2456,7 +2651,9 @@ function conteos(){
   const venc = cobrosDe(c => estadoCobro(c) === 'vencido').length;
   const mes = mesDe(hoy());
   const dif = sinImputarDe(mes + '-01', mes + '-31').conDif;
+  const gVenc = gastos(g => estadoGasto(g) === 'vencido').length;
   return {
+    finanzas: gVenc, finanzasAlerta: gVenc > 0,
     trabajos: Store.listar('partes', p => p.estado === 'curso' && p.fecha <= hoy()).length,
     funcionarios: dif, funcionariosAlerta: dif > 0,
     cobros: venc, cobrosAlerta: venc > 0,
@@ -2470,9 +2667,10 @@ function pintarVista(){
   const sub = subSeccion[seccion];
   if (seccion === 'panel')             v.innerHTML = vistaPanel();
   else if (seccion === 'trabajos')     v.innerHTML = vistaTrabajos();
-  else if (seccion === 'clientes')     v.innerHTML = vistaClientes();
+  else if (seccion === 'clientes')     v.innerHTML = vistaClientes(sub);
   else if (seccion === 'funcionarios') v.innerHTML = vistaFuncionarios(sub);
   else if (seccion === 'cobros')       v.innerHTML = vistaCobros();
+  else if (seccion === 'finanzas')     v.innerHTML = vistaFinanzas(sub);
   else if (seccion === 'reportes')     v.innerHTML = vistaReportes();
   else if (seccion === 'config')       v.innerHTML = vistaConfig(sub);
   pintarIconos(v);
@@ -2550,6 +2748,14 @@ function buscar(q){
     const texto = sinTildes(`${p.actividad} ${p.ot} ${p.area} ${p.contacto}`);
     if (texto.includes(q))
       out.push({ ico: 'trabajos', t: esc(p.actividad || 'Parte'), s: `${fFecha(p.fecha)} · ${nombreCliente(p.clienteId)} · ${p.area}`, js: `fichaParte('${p.id}')` });
+  });
+  Store.listar('proveedores').forEach(p => {
+    if (sinTildes(p.nombre).includes(q) || sinTildes(p.rubro || '').includes(q))
+      out.push({ ico: 'clientes', t: esc(p.nombre), s: `Proveedor · ${esc(p.rubro || '')} · saldo ${pesos(saldoProveedor(p.id))}`, js: `fichaProveedor('${p.id}')` });
+  });
+  gastos().forEach(g => {
+    if (sinTildes(`${g.concepto} ${g.factura}`).includes(q))
+      out.push({ ico: 'plata', t: esc(g.concepto), s: `Gasto · ${fFecha(g.fecha)} · ${pesos(g.total)}`, js: `editarGasto('${g.id}')` });
   });
   tiposActivos().forEach(t => { if (sinTildes(t.nombre).includes(q))
     out.push({ ico: 'config', t: esc(t.nombre), s: 'Tipo de trabajo', js: `irA('config','tipos')` }); });
@@ -2845,7 +3051,9 @@ function filaParte(p){
   const t = totalesParte(p);
   return `<tr onclick="fichaParte('${p.id}')">
     <td><b>${esc(p.actividad || 'Sin descripción')}</b>
-      <small>${esc(nombreTipo(p.tipoId))}${p.ot ? ' · ' + esc(p.ot) : ''}</small></td>
+      <small>${esc(nombreTipo(p.tipoId))}${p.ot ? ' · ' + esc(p.ot) : ''}</small>
+      ${diasDeParte(p).length > 1 ? `<span class="etq info">${diasDeParte(p).length} días</span>` : ''}
+      ${p.fechaFin ? `<span class="etq ok">culminó ${fCorta(p.fechaFin)}</span>` : ''}</td>
     <td class="solo-compu">${esc(nombreCliente(p.clienteId))}<small>${esc(p.area || '—')} · ${esc(p.contacto || '')}</small></td>
     <td><span style="display:flex;gap:3px;flex-wrap:wrap">${(p.filas || []).slice(0, 6).map(f =>
         `<span class="avatar mini" style="--c:${colorFunc(f.funcId)}" title="${esc(nombreFunc(f.funcId))}">${iniciales(nombreFunc(f.funcId))}</span>`).join('')}
@@ -2951,7 +3159,7 @@ function nuevoParte(fecha){
   pe = {
     id: null, fecha: fecha || hoy(), clienteId: cli,
     contacto: c && c.contactos && c.contactos[0] ? c.contactos[0].nombre : '',
-    area: '', tipoId: '', actividad: '', ot: '', estado: 'curso', obs: '', filas: [],
+    area: '', tipoId: '', actividad: '', ot: '', estado: 'curso', obs: '', fechaFin: '', filas: [],
   };
   peNuevo = true;
   abrirModal(pantallaParte);
@@ -2976,11 +3184,14 @@ function pantallaParte(){
     sub: peNuevo ? 'Cargá el trabajo y después las personas que estuvieron'
       : `${esc(nombreCliente(pe.clienteId))} · ${esc(pe.area || 'sin área')} · ${etqEstado(pe.estado)}`,
     cuerpo: `
+      ${(() => { const d = diasDeParte(pe); return d.length > 1
+        ? `<div class="nota-aviso info">${ico('calendario')}<div><b>Trabajo de ${d.length} días</b>, del ${fFecha(d[0])} al ${fFecha(d[d.length - 1])}.
+            Cada funcionario cuenta en el día que trabajó, así que el reporte del cliente sale día por día.</div></div>` : ''; })()}
       ${desc ? `<div class="nota-aviso">${ico('alerta')}<div><b>${DIAS[cfg().diaDescanso].replace(/^./, m => m.toUpperCase())}: día de descanso.</b>
         Las horas de este día se marcan solas como «día de descanso» y se cobran con el recargo que está en Configuración.</div></div>` : ''}
 
       <div class="grilla-campos">
-        ${campo('Fecha', `<input type="date" name="fecha" value="${pe.fecha}" onchange="peCambiarFecha(this.value)">`)}
+        ${campo('Fecha de inicio', `<input type="date" name="fecha" value="${pe.fecha}" onchange="peCambiarFecha(this.value)">`)}
         ${campo('Cliente', `<select name="clienteId" onchange="peCambiarCliente(this.value)">
           ${opciones(Store.listar('clientes').map(x => ({ v: x.id, t: x.nombre })), pe.clienteId)}</select>`)}
         ${campo('Contacto del cliente', `<select name="contacto" onchange="peSet('contacto',this.value)">
@@ -2996,13 +3207,15 @@ function pantallaParte(){
           <datalist id="pe-act">${actividadesUsadas().map(a => `<option value="${esc(a)}"></option>`).join('')}</datalist>`, 'ancho')}
         ${campo('Estado', `<select name="estado" onchange="peSet('estado',this.value)">
           ${opciones(ESTADOS.map(e => ({ v: e.id, t: e.nombre })), pe.estado)}</select>`)}
-        ${campo('Observaciones', `<input name="obs" value="${esc(pe.obs)}" oninput="peSet('obs',this.value)" placeholder="Opcional">`, 'doble')}
+        ${campo('Fecha de culminación', `<input type="date" name="fechaFin" value="${pe.fechaFin || ''}" min="${pe.fecha}" onchange="peSet('fechaFin',this.value)">`)}
+        ${campo('Observaciones del trabajo', `<input name="obs" value="${esc(pe.obs)}" oninput="peSet('obs',this.value)" placeholder="Opcional">`, 'doble')}
       </div>
 
       <div class="bloque">
         <b>${ico('funcionarios')} Funcionarios y horas</b>
         <div class="botonera" style="margin:10px 0 4px">
           <button class="btn btn-azul chico" onclick="peAgregar()">${ico('mas')} Agregar funcionario</button>
+          ${pe.filas.length ? `<button class="btn btn-linea chico" onclick="peOtroDia()">${ico('calendario')} Agregar otro día</button>` : ''}
           ${cuadrillas.length ? `<select onchange="peCuadrilla(this.value); this.value=''" aria-label="Cargar una cuadrilla" style="width:auto;min-height:34px">
             ${opciones(cuadrillas.map(x => ({ v: x.id, t: x.nombre })), '', '＋ Cargar una cuadrilla…')}</select>` : ''}
           ${pe.filas.length ? `<select onchange="peJornadaTodos(this.value); this.value=''" aria-label="Poner la misma jornada a todos" style="width:auto;min-height:34px">
@@ -3049,17 +3262,21 @@ function peTabla(){
     <button class="btn btn-azul" onclick="peAgregar()">${ico('mas')} Agregar el primer funcionario</button></div>`;
   return `<div class="tabla-resp"><table class="tabla compacta" id="pe-tabla">
     <thead><tr>
-      <th>Funcionario</th><th>Entrada</th><th>Salida</th><th class="num">Horas</th>
-      <th>Tipo de hora</th><th class="num">P.U.</th><th class="num solo-compu">Desc.</th><th class="num">Total</th><th></th>
+      <th>Fecha</th><th>Funcionario</th><th>Entrada</th><th>Salida</th><th class="num">Horas</th>
+      <th>Tipo de hora</th><th class="num">P.U.</th><th class="num solo-compu">Desc.</th><th class="num">Total</th>
+      <th>Qué hizo (detalle)</th><th></th>
     </tr></thead>
     <tbody>${pe.filas.map((f, i) => peFila(f, i)).join('')}</tbody>
   </table></div>
-  <div class="chico suave" style="margin-top:6px">Si ponés entrada y salida, las horas se calculan solas. Si dejás la entrada vacía, podés escribir las horas a mano.</div>`;
+  <div class="chico suave" style="margin-top:6px">Si ponés entrada y salida, las horas se calculan solas; si dejás la entrada vacía, escribís las horas a mano.
+    <b>Cada fila tiene su fecha</b>, así un mismo trabajo lleva varios días con distinta gente. En «Qué hizo» va el detalle
+    de esa persona, para cuando no todos hicieron lo mismo.</div>`;
 }
 function peFila(f, i){
   const h = horasFila(f), sinHoras = !f.entrada && !f.salida;
   const pasada = h > cfg().jornadaHoras + 0.01;
-  return `<tr data-i="${i}">
+  return `<tr data-i="${i}" class="${esDiaDescanso(f.fecha || pe.fecha) ? 'fila-descanso' : ''}">
+    <td><input type="date" value="${esc(f.fecha || pe.fecha)}" onchange="peFilaSet(${i},'fecha',this.value)" aria-label="Fecha" style="min-width:140px"></td>
     <td><select onchange="peFilaSet(${i},'funcId',this.value)" aria-label="Funcionario">
       ${opciones(funcActivos().map(x => ({ v: x.id, t: x.nombre })), f.funcId, '— elegir —')}</select></td>
     <td><input type="time" value="${esc(f.entrada || '')}" onchange="peFilaSet(${i},'entrada',this.value)" aria-label="Entrada" style="min-width:104px"></td>
@@ -3072,6 +3289,7 @@ function peFila(f, i){
     <td class="num"><input type="number" step="10" min="0" value="${f.pu || 0}" oninput="peFilaSet(${i},'pu',this.value)" aria-label="Precio por hora" style="width:84px;text-align:right"></td>
     <td class="num solo-compu"><input type="number" step="10" min="0" value="${f.descuento || 0}" oninput="peFilaSet(${i},'descuento',this.value)" aria-label="Descuento" style="width:78px;text-align:right"></td>
     <td class="num"><b class="pe-t">${pesos(totalFila(f))}</b></td>
+    <td><input value="${esc(f.obs || '')}" oninput="peFilaSet(${i},'obs',this.value)" placeholder="Opcional" aria-label="Qué hizo" style="min-width:210px"></td>
     <td class="acc"><button class="icon-btn chico" onclick="peQuitar(${i})" aria-label="Quitar">${ico('x')}</button></td>
   </tr>`;
 }
@@ -3079,32 +3297,69 @@ function peFila(f, i){
 /* ---------- Cambios en el borrador ---------- */
 function peSet(k, v){ pe[k] = v; if (k === 'estado') refrescarModal(); }
 function peCambiarFecha(v){
+  const vieja = pe.fecha;
   pe.fecha = v || hoy();
-  const def = tipoHoraPorFecha(pe.fecha);
-  pe.filas.forEach(f => { if (f.tipoHora !== 'extra') f.tipoHora = def; f.pu = precioHora(pe.clienteId, pe.fecha, f.tipoHora); });
+  const corrida = diasEntre(vieja, pe.fecha);
+  /* las filas se corren los mismos días: un trabajo de varios días no se desarma */
+  pe.filas.forEach(f => {
+    f.fecha = f.fecha ? sumarDias(f.fecha, corrida) : pe.fecha;
+    const def = tipoHoraPorFecha(f.fecha);
+    if (f.tipoHora !== 'extra') f.tipoHora = def;
+    f.pu = precioHora(pe.clienteId, f.fecha, f.tipoHora);
+  });
+  if (pe.fechaFin) pe.fechaFin = sumarDias(pe.fechaFin, corrida);
   refrescarModal();
 }
 function peCambiarCliente(v){
   pe.clienteId = v;
   const c = clienteDe(v);
   pe.contacto = c && c.contactos && c.contactos[0] ? c.contactos[0].nombre : '';
-  pe.area = '';
-  pe.filas.forEach(f => f.pu = precioHora(v, pe.fecha, f.tipoHora || 'comun'));
+  /* el área se conserva si el cliente nuevo también la tiene; si no, se avisa antes de soltarla */
+  const areas = (c && c.areas) || [];
+  if (pe.area && !areas.includes(pe.area)){
+    aviso(`«${esc(pe.area)}» no es un área de ${esc(c ? c.nombre : '')}: revisá el área del parte`, { tipo: 'alerta', ms: 6500 });
+    pe.area = '';
+  }
+  pe.filas.forEach(f => f.pu = precioHora(v, f.fecha || pe.fecha, f.tipoHora || 'comun'));
+  if (pe.filas.length) aviso(`Precios actualizados a la tarifa de ${esc(c ? c.nombre : '')}`);
   refrescarModal();
 }
 function peFilaSet(i, k, v){
   const f = pe.filas[i]; if (!f) return;
   if (k === 'pu' || k === 'descuento' || k === 'horas') f[k] = v === '' ? (k === 'horas' ? '' : 0) : Number(v);
   else f[k] = v;
-  if (k === 'tipoHora') f.pu = precioHora(pe.clienteId, pe.fecha, v);
-  if (k === 'entrada' || k === 'salida' || k === 'tipoHora') return peRedibujarFilas();
+  if (k === 'fecha'){
+    /* al mover una fila de día, el tipo de hora y el precio se recalculan para ESE día */
+    const def = tipoHoraPorFecha(v);
+    if (f.tipoHora !== 'extra') f.tipoHora = def;
+    f.pu = precioHora(pe.clienteId, v, f.tipoHora);
+  }
+  if (k === 'tipoHora') f.pu = precioHora(pe.clienteId, f.fecha || pe.fecha, v);
+  if (k === 'entrada' || k === 'salida' || k === 'tipoHora' || k === 'fecha') return peRedibujarFilas();
   peActualizarTotales(i);
 }
-function peAgregar(){
-  const usados = pe.filas.map(f => f.funcId);
+function peAgregar(dia){
+  const ultimo = dia || (pe.filas.length ? (pe.filas[pe.filas.length - 1].fecha || pe.fecha) : pe.fecha);
+  const usados = pe.filas.filter(f => (f.fecha || pe.fecha) === ultimo).map(f => f.funcId);
   const libre = funcActivos().find(f => !usados.includes(f.id));
-  pe.filas.push(nuevaFila(libre ? libre.id : '', pe.fecha, pe.clienteId));
+  pe.filas.push(nuevaFila(libre ? libre.id : '', ultimo, pe.clienteId));
   peRedibujarFilas();
+}
+/* Suma otro día al mismo trabajo, con la gente del último día cargado */
+function peOtroDia(){
+  const dias = diasDeParte(pe);
+  const ultimo = dias[dias.length - 1] || pe.fecha;
+  let sig = sumarDias(ultimo, 1);
+  while (esDiaDescanso(sig)) sig = sumarDias(sig, 1);          // se saltea el día de descanso
+  const delUltimo = pe.filas.filter(f => (f.fecha || pe.fecha) === ultimo);
+  (delUltimo.length ? delUltimo : [{ funcId: '' }]).forEach(f => {
+    const n = nuevaFila(f.funcId, sig, pe.clienteId);
+    n.entrada = f.entrada || JORNADA.entrada;
+    n.salida = f.salida || JORNADA.salida;
+    pe.filas.push(n);
+  });
+  refrescarModal();
+  aviso(`Día agregado: ${fDiaCorto(sig)} con ${delUltimo.length || 1} persona(s)`);
 }
 function peQuitar(i){ pe.filas.splice(i, 1); peRedibujarFilas(); }
 function peCuadrilla(id){
@@ -3114,7 +3369,8 @@ function peCuadrilla(id){
     pe.area = c.area || pe.area; pe.tipoId = pe.tipoId || c.tipoId || '';
   }
   const usados = pe.filas.map(f => f.funcId);
-  (c.funcIds || []).forEach(fid => { if (!usados.includes(fid)) pe.filas.push(nuevaFila(fid, pe.fecha, pe.clienteId)); });
+  const dia = pe.filas.length ? (pe.filas[pe.filas.length - 1].fecha || pe.fecha) : pe.fecha;
+  (c.funcIds || []).forEach(fid => { if (!usados.includes(fid)) pe.filas.push(nuevaFila(fid, dia, pe.clienteId)); });
   refrescarModal();
   aviso(`Cuadrilla «${c.nombre}» cargada`);
 }
@@ -3152,7 +3408,8 @@ function peGuardar(){
   const repe = pe.filas.map(f => f.funcId).filter((x, i, a) => a.indexOf(x) !== i);
   if (repe.length) aviso(`${nombreFunc(repe[0])} está dos veces en este parte`, { tipo: 'alerta' });
 
-  const datos = { fecha: pe.fecha, clienteId: pe.clienteId, contacto: pe.contacto, area: pe.area,
+  if (pe.fechaFin && pe.fechaFin < pe.fecha) return marcarError('fechaFin', 'La culminación no puede ser anterior al inicio.');
+  const datos = { fecha: pe.fecha, fechaFin: pe.fechaFin || '', clienteId: pe.clienteId, contacto: pe.contacto, area: pe.area,
     tipoId: pe.tipoId, actividad: pe.actividad.trim(), ot: pe.ot.trim(), estado: pe.estado,
     obs: pe.obs, filas: pe.filas };
   if (peNuevo){
@@ -3167,6 +3424,11 @@ function peGuardar(){
 function peAvanzar(){
   const sig = proximoEstado(pe.estado);
   pe.estado = sig;
+  /* al darlo por terminado, la culminación se sugiere con el último día trabajado */
+  if (sig === 'terminado' && !pe.fechaFin){
+    const d = diasDeParte(pe);
+    pe.fechaFin = d.length ? d[d.length - 1] : pe.fecha;
+  }
   if (!peNuevo){
     const datos = { ...pe }; delete datos.id;
     Store.editar('partes', pe.id, datos);
@@ -3224,7 +3486,18 @@ function peCopiarA(fecha){
    CLIENTES: ficha, contactos, áreas / centros de costo, tarifa propia,
    historial de trabajos y saldo pendiente de cobro
    ===================================================================== */
-function vistaClientes(){
+/* La sección tiene dos subpestañas: Clientes y Proveedores (22-proveedores.js) */
+function vistaClientes(sub){
+  const tab = sub || 'clientes';
+  subSeccion.clientes = tab;
+  return pestanas([
+    { id: 'clientes', t: 'Clientes', n: Store.listar('clientes').length },
+    { id: 'proveedores', t: 'Proveedores', n: Store.listar('proveedores').length },
+  ], tab, 'clIr') + (tab === 'proveedores' ? vistaProveedores() : vistaClientesLista());
+}
+function clIr(t){ irA('clientes', t); }
+
+function vistaClientesLista(){
   const cl = Store.listar('clientes').sort((a, b) => (b.principal ? 1 : 0) - (a.principal ? 1 : 0));
   const mes = mesDe(hoy()), d = mes + '-01', h = mes + '-31';
   return `
@@ -3279,10 +3552,12 @@ function fichaCliente(id, tab){
           <div class="kpi chico ${saldoCliente(id) ? 'k-alerta' : 'k-ok'}"><span class="kpi-t">Pendiente de cobro</span>
             <span class="kpi-v">${pesos(saldoCliente(id))}</span><small>${cobrosDe(x => x.clienteId === id && estadoCobro(x) !== 'cobrado').length} documento(s)</small></div>
         </div>
-        ${pestanas([{ id: 'trabajos', t: 'Trabajos' }, { id: 'contactos', t: 'Contactos', n: (c.contactos || []).length },
+        ${pestanas([{ id: 'cuenta', t: 'Estado de cuenta' }, { id: 'trabajos', t: 'Trabajos' },
+                    { id: 'contactos', t: 'Contactos', n: (c.contactos || []).length },
                     { id: 'areas', t: 'Áreas', n: (c.areas || []).length }, { id: 'tarifas', t: 'Tarifas' },
                     { id: 'cobros', t: 'Cobros' }], fcTab, `fcIr`)}
-        ${fcTab === 'trabajos' ? fcTrabajos(partes)
+        ${fcTab === 'cuenta' ? tablaCuenta(cuentaCliente(id), 'factura', id)
+        : fcTab === 'trabajos' ? fcTrabajos(partes)
         : fcTab === 'contactos' ? fcContactos(c)
         : fcTab === 'areas' ? fcAreas(c)
         : fcTab === 'tarifas' ? fcTarifas(c)
@@ -4377,7 +4652,7 @@ function repClienteHTML(){
           <td class="num">${fHorasN(f.horasCalc)}</td>
           <td class="cen">${(TIPOS_HORA.find(t => t.id === f.tipoHora) || {}).corto}</td>
           <td>${esc(f.area || '')}</td>
-          <td>${esc(f.obs || f.actividad)}${f.ot ? ` <b>${esc(f.ot)}</b>` : ''}</td>
+          <td>${esc(f.actividad)}${f.ot ? ` <b>${esc(f.ot)}</b>` : ''}${f.obs ? `<small>${esc(f.obs)}</small>` : ''}</td>
           <td class="num">${pesos(f.pu)}</td>
           <td class="num">${f.descuento ? pesos(f.descuento) : ''}</td>
           <td class="num">${pesos(f.totalCalc)}</td>
@@ -4425,20 +4700,23 @@ function repTareasHTML(){
   return `<div class="a4">
     ${repCabCorta('REPORTE DE TRABAJOS Y TAREAS')}
     <table class="a4-tabla">
-      <thead><tr><th>Tarea / actividad</th><th>Tipo</th><th>Fechas</th><th>Quiénes trabajaron</th>
+      <thead><tr><th>Tarea / actividad</th><th>Tipo</th><th>Empezó</th><th>Terminó</th><th>Quiénes trabajaron</th>
         <th class="num">Horas</th><th class="num">Total</th></tr></thead>
       <tbody>${l.map(x => {
-        const fechas = [...new Set(x.partes.map(p => p.fecha))].sort();
+        const fechas = [...new Set(x.partes.flatMap(p => diasDeParte(p)))].sort();
         const porFunc = {};
         x.partes.forEach(p => (p.filas || []).forEach(f => porFunc[f.funcId] = redondear((porFunc[f.funcId] || 0) + horasFila(f))));
+        const termino = x.partes.map(p => finDeParte(p)).sort().pop();
+        const puesta = x.partes.some(p => p.fechaFin);
         return `<tr>
           <td><b>${esc(x.k)}</b><small>${esc([...new Set(x.partes.map(p => p.area))].filter(Boolean).join(' · '))}</small></td>
           <td>${esc(nombreTipo(x.tipoId))}</td>
-          <td>${fechas.length === 1 ? fFecha(fechas[0]) : `${fCorta(fechas[0])} al ${fCorta(fechas[fechas.length - 1])}<small>${fechas.length} días</small>`}</td>
+          <td>${fFecha(fechas[0])}${fechas.length > 1 ? `<small>${fechas.length} días</small>` : ''}</td>
+          <td>${fFecha(termino)}${puesta ? '<small>culminación</small>' : ''}</td>
           <td>${Object.entries(porFunc).sort((a, b) => b[1] - a[1]).map(([fid, h]) => `${esc(nombreCorto(nombreFunc(fid)))} <b>${fHorasN(h)}</b>`).join(' · ')}</td>
           <td class="num"><b>${fHorasN(x.t.horas)}</b></td>
           <td class="num">${pesos2(x.t.subtotal)}</td></tr>`; }).join('')}</tbody>
-      <tfoot><tr><td colspan="4">${l.length} tarea(s) · ${partes.length} parte(s)</td>
+      <tfoot><tr><td colspan="5">${l.length} tarea(s) · ${partes.length} parte(s)</td>
         <td class="num">${fHorasN(tot.horas)}</td><td class="num">${pesos2(tot.subtotal)}</td></tr></tfoot>
     </table></div>`;
 }
@@ -4530,16 +4808,18 @@ function imprimirParte(id){
       <tr><th>TIPO DE TRABAJO:</th><td>${esc(nombreTipo(p.tipoId))}</td></tr>
       <tr><th>ACTIVIDAD:</th><td>${esc(p.actividad)}</td></tr>
       ${p.ot ? `<tr><th>N° DE OT:</th><td>${esc(p.ot)}</td></tr>` : ''}
+      ${diasDeParte(p).length > 1 ? `<tr><th>DÍAS:</th><td>${diasDeParte(p).length} días, del ${fFecha(inicioDeParte(p))} al ${fFecha(finDeParte(p))}</td></tr>` : ''}
+      ${p.fechaFin ? `<tr><th>CULMINÓ:</th><td>${fFecha(p.fechaFin)}</td></tr>` : ''}
     </table></div>
-    <table class="a4-tabla"><thead><tr><th>Funcionario</th><th>Entrada</th><th>Salida</th>
-      <th class="num">Horas</th><th>Tipo de hora</th><th class="num">P.U.</th><th class="num">Total</th></tr></thead>
-      <tbody>${(p.filas || []).map(f => `<tr><td>${esc(nombreFunc(f.funcId))}</td>
+    <table class="a4-tabla"><thead><tr><th>Fecha</th><th>Funcionario</th><th>Entrada</th><th>Salida</th>
+      <th class="num">Horas</th><th>Tipo de hora</th><th class="num">P.U.</th><th class="num">Total</th><th>Detalle</th></tr></thead>
+      <tbody>${(p.filas || []).map(f => `<tr><td>${fCorta(fechaFila(f, p))}</td><td>${esc(nombreFunc(f.funcId))}</td>
         <td class="cen">${fHora(f.entrada) === '—' ? '' : fHora(f.entrada)}</td>
         <td class="cen">${fHora(f.salida) === '—' ? '' : fHora(f.salida)}</td>
         <td class="num">${fHorasN(horasFila(f))}</td>
         <td class="cen">${(TIPOS_HORA.find(t => t.id === (f.tipoHora || 'comun')) || {}).corto}</td>
-        <td class="num">${pesos(f.pu)}</td><td class="num">${pesos(totalFila(f))}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td colspan="3">Total</td><td class="num">${fHorasN(t.horas)}</td><td colspan="2"></td>
+        <td class="num">${pesos(f.pu)}</td><td class="num">${pesos(totalFila(f))}</td><td class="chico">${esc(f.obs || '')}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="4">Total</td><td class="num">${fHorasN(t.horas)}</td><td colspan="2"></td>
         <td class="num">${pesos2(t.subtotal)}</td></tr></tfoot>
     </table>
     ${p.obs ? `<div class="a4-nota"><b>Observaciones:</b> ${esc(p.obs)}</div>` : ''}
@@ -4609,150 +4889,15 @@ async function guardarArchivo(datos, nombre){
 }
 const bajar = (blob, nombre) => guardarArchivo(blob, nombre);
 
-/* ---------- Excel genérico (una tabla) ---------- */
-async function exportarExcel(nombre, columnas, filas){
-  const datos = [columnas.map(c => c.t)].concat(filas.map(f => columnas.map(c => {
-    const v = c.v(f); return v === undefined || v === null ? '' : v;
-  })));
-  try {
-    await cargarScript(CDN.xlsx);
-    const hoja = XLSX.utils.aoa_to_sheet(datos);
-    hoja['!cols'] = columnas.map(c => ({ wch: Math.max(10, Math.min(42, c.t.length + 6)) }));
-    const libro = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(libro, hoja, nombre.slice(0, 28));
-    const buf = XLSX.write(libro, { type: 'array', bookType: 'xlsx' });
-    await guardarArchivo(new Blob([buf]), nombreArchivo(nombre) + '.xlsx');
-  } catch (e) {
-    exportarCSV(nombre, datos);
-  }
-}
+/* ---------- Excel ----------
+   El armado del Excel (con el logo y los colores) está en 17b-excel.js y
+   17c-excel-reportes.js. Acá queda solo el .csv, que es el respaldo para
+   cuando la página se abre sin internet y no se puede bajar ExcelJS. */
 function exportarCSV(nombre, datos){
   const celda = v => { const s = String(v ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const texto = datos.map(f => f.map(celda).join(';')).join('\r\n');
-  guardarArchivo(new Blob(['﻿' + texto], { type: 'text/csv;charset=utf-8' }), nombreArchivo(nombre) + '.csv');
-}
-
-/* =====================================================================
-   EL REPORTE PARA EL CLIENTE EN EXCEL
-   Mismo formato que la planilla: encabezado, tabla de horas, subtotal,
-   IVA, total y el cuadro por centro de costo. Si el período pasa de una
-   semana, va una hoja por semana más una hoja con el total.
-   ===================================================================== */
-async function repExcel(){
-  if (rep.tipo === 'tareas') return repExcelTareas();
-  if (rep.tipo === 'horas') return repExcelHoras();
-  const filas = repFilas();
-  if (!filas.length) return aviso('No hay nada para exportar con estos filtros', { tipo: 'error' });
-  const c = clienteDe(rep.clienteId);
-  try {
-    await cargarScript(CDN.xlsx);
-    const libro = XLSX.utils.book_new();
-    /* una hoja por semana */
-    const semanas = {};
-    filas.forEach(f => { const k = inicioSemana(f.fecha); (semanas[k] = semanas[k] || []).push(f); });
-    const claves = Object.keys(semanas).sort();
-    claves.forEach(k => {
-      const nombre = claves.length > 1 ? `${fCorta(k).replace('/', '-')} al ${fCorta(sumarDias(k, 6)).replace('/', '-')}` : 'Reporte';
-      XLSX.utils.book_append_sheet(libro, hojaReporte(c, semanas[k], k, sumarDias(k, 6)), nombre.slice(0, 28));
-    });
-    if (claves.length > 1)
-      XLSX.utils.book_append_sheet(libro, hojaReporte(c, filas, rep.desde, rep.hasta), 'TOTAL');
-    const buf = XLSX.write(libro, { type: 'array', bookType: 'xlsx' });
-    await guardarArchivo(new Blob([buf]), nombreArchivo(`Reporte ${c.nombre}${rep.contacto ? ' - ' + rep.contacto : ''}`) + '.xlsx');
-  } catch (e) {
-    /* sin internet: el mismo contenido en una sola tabla .csv */
-    const tar = tarifaCliente(rep.clienteId, rep.hasta);
-    const datos = [
-      ['ORDEN DE TRABAJO:', c.relacion || 'RELACIÓN ' + c.nombre], [],
-      ['CLIENTE:', c.nombre, '', 'Tarifa', 'H. normal', tar.comun],
-      ['CONTACTO CLIENTE:', rep.contacto || '', '', '', 'H. extra', tar.extra],
-      ['PERÍODO:', fFecha(rep.desde), 'a', fFecha(rep.hasta)], [],
-      ['Fecha', 'N°', 'Funcionario', 'Entrada', 'Salida', 'Horas trabajadas', 'Tipo de hora', 'Área', 'Actividad desarrollada', 'P.U.', 'Descuento', 'TOTAL'],
-    ];
-    let dia = '', n = 0;
-    filas.forEach(f => {
-      if (f.fecha !== dia){ dia = f.fecha; n = 0; } n++;
-      datos.push([n === 1 ? fFecha(f.fecha) : '', n, nombreFunc(f.funcId), f.entrada || '', f.salida || '',
-        f.horasCalc, (TIPOS_HORA.find(t => t.id === f.tipoHora) || {}).corto, f.area || '',
-        f.obs || f.actividad, f.pu, f.descuento || 0, f.totalCalc]);
-    });
-    const sub = redondear(sumar(filas, f => f.totalCalc)), iva = redondear(sub * cfg().iva / 100);
-    datos.push([], ['', '', '', '', '', '', '', '', '', '', 'SUBTOTAL', sub],
-      ['', '', '', '', '', '', '', '', '', '', `IVA ${cfg().iva}%`, iva],
-      ['', '', '', '', '', '', '', '', '', '', 'TOTAL', redondear(sub + iva)]);
-    exportarCSV(`Reporte ${c.nombre}`, datos);
-  }
-}
-/* Arma una hoja de Excel con el formato de la planilla */
-function hojaReporte(c, filas, desde, hasta){
-  const tar = tarifaCliente(c.id, hasta);
-  const sub = redondear(sumar(filas, f => f.totalCalc));
-  const iva = redondear(sub * cfg().iva / 100);
-  const e = cfg().empresa;
-  const datos = [
-    [e.nombre, '', '', '', '', '', '', '', 'ORDEN DE TRABAJO:', c.relacion || ''],
-    [e.rubro + ' · RUT ' + e.rut], [],
-    ['CLIENTE:', c.nombre, '', '', '', '', '', 'Tarifa'],
-    ['CONTACTO CLIENTE:', rep.contacto || (c.contactos || []).map(k => k.nombre).join(' / '), '', '', '', '', '', 'H. normal', tar.comun],
-    ['PERÍODO:', fFecha(desde), 'a', fFecha(hasta), '', '', '', 'H. extra', tar.extra], [],
-    ['Fecha', 'N°', 'Funcionario', 'Entrada', 'Salida', 'Horas trabajadas', 'Tipo de hora', 'Área', 'Actividad desarrollada', 'P.U.', 'Descuento', 'TOTAL'],
-  ];
-  let dia = '', n = 0;
-  filas.forEach(f => {
-    if (f.fecha !== dia){ dia = f.fecha; n = 0; } n++;
-    datos.push([n === 1 ? fFecha(f.fecha) : '', n, nombreFunc(f.funcId), f.entrada || '', f.salida || '',
-      f.horasCalc, (TIPOS_HORA.find(t => t.id === f.tipoHora) || {}).corto, f.area || '',
-      f.obs || f.actividad, f.pu, f.descuento || 0, f.totalCalc]);
-  });
-  datos.push(['', '', '', '', 'TOTAL HORAS', redondear(sumar(filas, f => f.horasCalc))]);
-  datos.push([], ['', '', '', '', '', '', '', '', '', '', 'SUBTOTAL', sub]);
-  datos.push(['', '', '', '', '', '', '', '', '', '', `IVA ${cfg().iva}%`, iva]);
-  datos.push(['', '', '', '', '', '', '', '', '', '', 'TOTAL', redondear(sub + iva)]);
-  /* cuadro por centro de costo */
-  const cc = {};
-  filas.forEach(f => { const k = f.area || 'Sin área'; cc[k] = redondear((cc[k] || 0) + f.totalCalc); });
-  datos.push([], ['ÍTEM', 'Centro de Costo', '%', 'TOTAL POR C/C']);
-  Object.entries(cc).sort((a, b) => b[1] - a[1]).forEach(([k, v], i) =>
-    datos.push([i + 1, k, sub ? Math.round(v / sub * 100) / 100 : 0, v]));
-  datos.push(['', 'TOTAL', 1, sumar(Object.values(cc))]);
-
-  const hoja = XLSX.utils.aoa_to_sheet(datos);
-  hoja['!cols'] = [{ wch: 12 }, { wch: 5 }, { wch: 20 }, { wch: 9 }, { wch: 9 }, { wch: 10 },
-    { wch: 12 }, { wch: 22 }, { wch: 46 }, { wch: 10 }, { wch: 10 }, { wch: 13 }];
-  return hoja;
-}
-async function repExcelTareas(){
-  const partes = repPartes();
-  if (!partes.length) return aviso('No hay nada para exportar', { tipo: 'error' });
-  const g = {};
-  partes.forEach(p => { const k = p.actividad || 'Sin descripción'; (g[k] = g[k] || []).push(p); });
-  exportarExcel('Trabajos y tareas', [
-    { t: 'Tarea / actividad', v: x => x.k },
-    { t: 'Tipo de trabajo', v: x => nombreTipo(x.l[0].tipoId) },
-    { t: 'Áreas', v: x => [...new Set(x.l.map(p => p.area))].filter(Boolean).join(' · ') },
-    { t: 'Desde', v: x => fFecha(x.l.map(p => p.fecha).sort()[0]) },
-    { t: 'Hasta', v: x => fFecha(x.l.map(p => p.fecha).sort().pop()) },
-    { t: 'Días', v: x => new Set(x.l.map(p => p.fecha)).size },
-    { t: 'Funcionarios', v: x => [...new Set(x.l.flatMap(p => (p.filas || []).map(f => nombreFunc(f.funcId))))].join(', ') },
-    { t: 'Horas', v: x => totalesDe(x.l).horas },
-    { t: 'Subtotal', v: x => totalesDe(x.l).subtotal },
-  ], Object.entries(g).map(([k, l]) => ({ k, l })));
-}
-async function repExcelHoras(){
-  const filas = filasEntre(rep.desde, rep.hasta, f => f.clienteId === rep.clienteId && rep.incluir.includes(f.estado));
-  if (!filas.length) return aviso('No hay nada para exportar', { tipo: 'error' });
-  const g = {};
-  filas.forEach(f => { (g[f.funcId] = g[f.funcId] || []).push(f); });
-  exportarExcel('Horas por funcionario', [
-    { t: 'Funcionario', v: x => nombreFunc(x.id) },
-    { t: 'Especialidad', v: x => (funcDe(x.id) || {}).especialidad || '' },
-    { t: 'Horas comunes', v: x => sumar(x.l.filter(f => f.tipoHora === 'comun'), f => f.horasCalc) },
-    { t: 'Horas extra', v: x => sumar(x.l.filter(f => f.tipoHora === 'extra'), f => f.horasCalc) },
-    { t: 'Horas día de descanso', v: x => sumar(x.l.filter(f => f.tipoHora === 'descanso'), f => f.horasCalc) },
-    { t: 'Total de horas', v: x => sumar(x.l, f => f.horasCalc) },
-    { t: 'Días', v: x => new Set(x.l.map(f => f.fecha)).size },
-    { t: 'Facturado', v: x => sumar(x.l, f => f.totalCalc) },
-  ], Object.entries(g).map(([id, l]) => ({ id, l })));
+  guardarArchivo(new Blob(['\ufeff' + texto], { type: 'text/csv;charset=utf-8' }), nombreArchivo(nombre) + '.csv');
+  aviso('Sin internet no puedo armar el Excel con formato: te bajo un .csv, que Excel abre igual', { tipo: 'alerta', ms: 6500 });
 }
 
 /* =====================================================================
@@ -4904,6 +5049,604 @@ async function repPDF(){
     doc.text(`Página ${i} de ${n}`, W - 12, doc.internal.pageSize.getHeight() - 6, { align: 'right' });
   }
   await guardarArchivo(doc.output('blob'), nombreArchivo(`Reporte ${c.nombre}${rep.contacto ? ' - ' + rep.contacto : ''}`) + '.pdf');
+}
+
+
+/* ===== js/17b-excel.js ===== */
+/* =====================================================================
+   EL EXCEL
+   No es una tabla pelada: sale con el logo de IHISA, los colores de la
+   marca, los números con formato de plata y de horas, la fila de arriba
+   fija, filtros, y preparado para imprimir en A4 apaisado.
+
+   Se arma con ExcelJS (se baja sola al apretar el botón). Si no hay
+   internet, 17-exportar.js hace el .csv de siempre.
+   ===================================================================== */
+const CDN_EXCELJS = 'https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js';
+
+/* ---- La paleta, en el formato que entiende Excel (AARRGGBB) ---- */
+const XC = {
+  marino:   'FF002564',   // el azul profundo del menú
+  azul:     'FF003399',   // el azul del logo
+  naranja:  'FFF28C28',
+  verde:    'FF1E7F4F',
+  rojo:     'FFB3272C',
+  texto:    'FF15172A',
+  gris:     'FF5A6378',
+  grisClaro:'FFEDF1F8',
+  linea:    'FFD7DCE8',
+  cebra:    'FFF7F9FC',
+  blanco:   'FFFFFFFF',
+};
+const FUENTE = 'Calibri';
+const borde1 = c => ({ style: 'thin', color: { argb: c || XC.linea } });
+const todoBorde = c => ({ top: borde1(c), left: borde1(c), bottom: borde1(c), right: borde1(c) });
+const relleno = argb => ({ type: 'pattern', pattern: 'solid', fgColor: { argb } });
+/* Formatos de número: la plata con separador de miles y las horas con su "h" */
+const F_PESOS = '"$" #,##0;[Red]-"$" #,##0';
+const F_PESOS2 = '"$" #,##0.00;[Red]-"$" #,##0.00';
+const F_HORAS = '#,##0.0" h"';
+const F_FECHA = 'dd/mm/yyyy';
+const F_PORC = '0%';
+/* Excel guarda las fechas en hora universal: si le pasamos la medianoche de acá,
+   el archivo queda con una fracción de hora y la fecha puede correrse un día.
+   Por eso toda fecha que va al Excel pasa por esta función. */
+const fechaExcel = s => { if (!s) return null; const [a, m, d] = String(s).slice(0, 10).split('-').map(Number); return new Date(Date.UTC(a, (m || 1) - 1, d || 1)); };
+
+async function cargarExcelJS(){ await cargarScript(CDN_EXCELJS); return window.ExcelJS; }
+
+/* ---------------------------------------------------------------
+   El encabezado con el logo, que va igual en todas las hojas
+   Devuelve en qué fila sigue el contenido.
+   --------------------------------------------------------------- */
+async function encabezadoExcel(wb, ws, { titulo, subtitulo, derecha = [], anchoCols }){
+  const e = cfg().empresa;
+  ws.getRow(1).height = 10;
+  ws.getRow(2).height = 20; ws.getRow(3).height = 22; ws.getRow(4).height = 16; ws.getRow(5).height = 12;
+
+  /* el logo, como imagen de verdad adentro del archivo */
+  try {
+    const logo = await logoPNG();
+    if (logo){
+      const id = wb.addImage({ base64: logo.url.split(',')[1], extension: 'png' });
+      const alto = 46, ancho = Math.round(alto * logo.ancho / logo.alto);
+      ws.addImage(id, { tl: { col: 0.25, row: 1.2 }, ext: { width: ancho, height: alto } });
+    }
+  } catch (err) { /* sin logo igual sale bien */ }
+
+  const col = n => ws.getColumn(n).letter;
+  const ultima = col(anchoCols);
+  /* banda de color abajo del encabezado */
+  ws.mergeCells(`A6:${ultima}6`);
+  ws.getCell('A6').fill = relleno(XC.marino);
+  ws.getRow(6).height = 4;
+
+  /* título */
+  ws.mergeCells(`C2:${col(Math.max(5, anchoCols - 4))}2`);
+  const t1 = ws.getCell('C2');
+  t1.value = (titulo || '').toUpperCase();
+  t1.font = { name: FUENTE, size: 9, bold: true, color: { argb: XC.gris } };
+  t1.alignment = { vertical: 'middle' };
+
+  ws.mergeCells(`C3:${col(Math.max(5, anchoCols - 4))}4`);
+  const t2 = ws.getCell('C3');
+  t2.value = subtitulo || '';
+  t2.font = { name: FUENTE, size: 18, bold: true, color: { argb: XC.marino } };
+  t2.alignment = { vertical: 'middle' };
+
+  /* datos de la empresa, a la derecha */
+  const dcol = Math.max(6, anchoCols - 3);
+  const lineas = derecha.length ? derecha
+    : [e.nombre, e.rubro, 'RUT ' + e.rut, e.direccion + ' · ' + e.telefono];
+  lineas.slice(0, 4).forEach((txt, i) => {
+    ws.mergeCells(`${col(dcol)}${2 + i}:${ultima}${2 + i}`);
+    const c = ws.getCell(`${col(dcol)}${2 + i}`);
+    c.value = txt;
+    c.font = { name: FUENTE, size: i === 0 ? 11 : 8.5, bold: i === 0,
+      color: { argb: i === 0 ? XC.marino : XC.gris } };
+    c.alignment = { horizontal: 'right', vertical: 'middle' };
+  });
+  return 8;
+}
+
+/* ---------------------------------------------------------------
+   Un recuadro de datos (CLIENTE: ... / PERÍODO: ...)
+   --------------------------------------------------------------- */
+function recuadroDatos(ws, fila, pares, colIni = 1){
+  pares.forEach(([et, val], i) => {
+    const f = fila + i;
+    const a = ws.getCell(f, colIni), b = ws.getCell(f, colIni + 1);
+    a.value = et;
+    a.font = { name: FUENTE, size: 9, bold: true, color: { argb: XC.gris } };
+    a.alignment = { horizontal: 'left', vertical: 'middle' };
+    b.value = val;
+    b.font = { name: FUENTE, size: 10.5, bold: true, color: { argb: XC.texto } };
+    b.alignment = { horizontal: 'left', vertical: 'middle' };
+    ws.getRow(f).height = 16;
+  });
+  return fila + pares.length;
+}
+
+/* ---------------------------------------------------------------
+   La tabla: encabezado azul, filas cebra, totales y filtros
+   columnas: [{ t:'Título', k:'clave', w:14, fmt:F_PESOS, al:'right', tipo:'num' }]
+   --------------------------------------------------------------- */
+function tablaExcel(ws, fila, columnas, filas, opciones = {}){
+  const o = opciones;
+  ws.columns = columnas.map(c => ({ width: c.w || 14 }));
+
+  /* encabezado */
+  const fe = ws.getRow(fila);
+  fe.height = 26;
+  columnas.forEach((c, i) => {
+    const cel = fe.getCell(i + 1);
+    cel.value = c.t;
+    cel.font = { name: FUENTE, size: 9.5, bold: true, color: { argb: XC.blanco } };
+    cel.fill = relleno(XC.marino);
+    cel.alignment = { horizontal: c.al === 'right' ? 'right' : (c.al === 'center' ? 'center' : 'left'),
+      vertical: 'middle', wrapText: true };
+    cel.border = { bottom: borde1(XC.azul) };
+  });
+
+  /* filas */
+  filas.forEach((f, n) => {
+    const r = ws.getRow(fila + 1 + n);
+    r.height = 15;
+    columnas.forEach((c, i) => {
+      const cel = r.getCell(i + 1);
+      const v = c.v ? c.v(f) : f[c.k];
+      cel.value = (v === undefined || v === null || v === '') ? null : v;
+      cel.font = { name: FUENTE, size: 10, color: { argb: XC.texto },
+        bold: !!(o.negrita && o.negrita(f, c)) };
+      cel.alignment = { horizontal: c.al === 'right' ? 'right' : (c.al === 'center' ? 'center' : 'left'),
+        vertical: 'middle', wrapText: !!c.wrap };
+      if (c.fmt) cel.numFmt = c.fmt;
+      cel.border = { bottom: borde1(), left: borde1(), right: borde1() };
+      const color = o.colorFila && o.colorFila(f);
+      cel.fill = relleno(color || (n % 2 ? XC.cebra : XC.blanco));
+      if (o.colorTexto){ const ct = o.colorTexto(f, c); if (ct) cel.font = { ...cel.font, color: { argb: ct } }; }
+    });
+  });
+
+  const ultima = fila + filas.length;
+  /* filtros y fila de arriba fija: la tabla se puede mirar sin perder los títulos */
+  if (filas.length){
+    ws.autoFilter = { from: { row: fila, column: 1 }, to: { row: ultima, column: columnas.length } };
+    ws.views = [{ state: 'frozen', ySplit: fila, xSplit: o.congelarCols || 0 }];
+  }
+  return ultima;
+}
+
+/* ---- La fila de totales, abajo de la tabla ---- */
+function totalesExcel(ws, fila, columnas, valores, opciones = {}){
+  const r = ws.getRow(fila);
+  r.height = 20;
+  columnas.forEach((c, i) => {
+    const cel = r.getCell(i + 1);
+    const v = valores[c.k];
+    cel.value = (i === 0 && !v) ? (opciones.rotulo || 'TOTAL') : (v === undefined ? null : v);
+    cel.font = { name: FUENTE, size: 10.5, bold: true, color: { argb: XC.marino } };
+    cel.fill = relleno(XC.grisClaro);
+    cel.alignment = { horizontal: c.al === 'right' ? 'right' : (i === 0 ? 'left' : 'center'), vertical: 'middle' };
+    if (c.fmt && v !== undefined) cel.numFmt = c.fmt;
+    cel.border = { top: { style: 'medium', color: { argb: XC.marino } }, bottom: borde1(XC.linea) };
+  });
+  return fila;
+}
+
+/* ---- Un renglón de cierre bien marcado (SUBTOTAL / IVA / TOTAL) ---- */
+function cierreExcel(ws, fila, colEtiqueta, colValor, etiqueta, valor, fuerte){
+  const a = ws.getCell(fila, colEtiqueta), b = ws.getCell(fila, colValor);
+  a.value = etiqueta; b.value = valor;
+  const color = fuerte ? XC.blanco : XC.marino;
+  [a, b].forEach(c => {
+    c.font = { name: FUENTE, size: fuerte ? 12 : 10.5, bold: true, color: { argb: color } };
+    c.fill = relleno(fuerte ? XC.marino : XC.grisClaro);
+    c.border = todoBorde(fuerte ? XC.marino : XC.linea);
+  });
+  a.alignment = { horizontal: 'right', vertical: 'middle' };
+  b.alignment = { horizontal: 'right', vertical: 'middle' };
+  b.numFmt = F_PESOS2;
+  ws.getRow(fila).height = fuerte ? 22 : 18;
+  return fila + 1;
+}
+
+/* ---- Una nota chica al pie ---- */
+function notaExcel(ws, fila, texto, hastaCol){
+  ws.mergeCells(fila, 1, fila, hastaCol);
+  const c = ws.getCell(fila, 1);
+  c.value = texto;
+  c.font = { name: FUENTE, size: 8.5, italic: true, color: { argb: XC.gris } };
+  c.alignment = { horizontal: 'left', vertical: 'middle' };
+  return fila + 1;
+}
+
+/* ---- Cómo se imprime la hoja ---- */
+function imprimirHoja(ws, filaTitulos, apaisado = true){
+  ws.pageSetup = {
+    paperSize: 9, orientation: apaisado ? 'landscape' : 'portrait',
+    fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+    margins: { left: 0.4, right: 0.4, top: 0.5, bottom: 0.5, header: 0.2, footer: 0.2 },
+    printTitlesRow: filaTitulos ? `${filaTitulos}:${filaTitulos}` : undefined,
+  };
+  ws.headerFooter = { oddFooter: '&L' + cfg().empresa.nombre + '&CPágina &P de &N&R&D' };
+}
+
+/* ---------------------------------------------------------------
+   Guardar el libro
+   --------------------------------------------------------------- */
+async function bajarLibro(wb, nombre){
+  wb.creator = 'Wydan Solutions'; wb.company = cfg().empresa.nombre;
+  wb.created = new Date();
+  const buf = await wb.xlsx.writeBuffer();
+  await guardarArchivo(new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    nombreArchivo(nombre) + '.xlsx');
+}
+
+
+/* ===== js/17c-excel-reportes.js ===== */
+/* =====================================================================
+   LOS EXCEL DE CADA REPORTE
+   Todos salen con el logo, los colores de IHISA y los números con
+   formato. El del cliente lleva una hoja por semana y una de resumen.
+   ===================================================================== */
+
+/* El Excel de cualquier tabla de la página (Trabajos, Horas, Cobros…) */
+async function exportarExcel(nombre, columnas, filas, extra = {}){
+  const datos = [columnas.map(c => c.t)].concat(filas.map(f => columnas.map(c => {
+    const v = c.v(f); return v === undefined || v === null ? '' : v;
+  })));
+  let ExcelJS;
+  try { ExcelJS = await cargarExcelJS(); } catch (e) { return exportarCSV(nombre, datos); }
+
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(nombre.slice(0, 28), { properties: { defaultRowHeight: 15 } });
+  const cols = columnas.map(c => ({
+    t: c.t, w: c.w || Math.max(11, Math.min(40, c.t.length + 6)),
+    al: c.al || (c.fmt ? 'right' : 'left'), fmt: c.fmt, wrap: c.wrap, v: c.v,
+  }));
+  const f0 = await encabezadoExcel(wb, ws, {
+    titulo: cfg().empresa.nombre, subtitulo: nombre, anchoCols: cols.length,
+  });
+  let f = recuadroDatos(ws, f0, [['PERÍODO:', extra.periodo || 'Todo lo cargado'],
+    ['EMITIDO:', fFecha(hoy())]]) + 1;
+  const fin = tablaExcel(ws, f, cols, filas, { congelarCols: 1 });
+  if (extra.totales) totalesExcel(ws, fin + 1, cols, extra.totales, { rotulo: extra.rotulo || 'TOTAL' });
+  notaExcel(ws, fin + 3, `${filas.length} registro(s) · ${cfg().empresa.nombre} · emitido el ${fFecha(hoy())} con Wydan Solutions`, cols.length);
+  imprimirHoja(ws, f);
+  await bajarLibro(wb, nombre);
+}
+
+/* =====================================================================
+   EL REPORTE PARA EL CLIENTE
+   Es el que reemplaza la planilla que se manda hoy.
+   ===================================================================== */
+const COLS_REPORTE = [
+  { t: 'Fecha', w: 12, fmt: F_FECHA, al: 'center' },
+  { t: 'N°', w: 5, al: 'center' },
+  { t: 'Funcionario', w: 20 },
+  { t: 'Entrada', w: 9, al: 'center' },
+  { t: 'Salida', w: 9, al: 'center' },
+  { t: 'Horas trabajadas', w: 11, fmt: F_HORAS, al: 'right' },
+  { t: 'Tipo de hora', w: 12, al: 'center' },
+  { t: 'Área', w: 20 },
+  { t: 'Actividad desarrollada', w: 42, wrap: true },
+  { t: 'Detalle', w: 26, wrap: true },
+  { t: 'P.U.', w: 11, fmt: F_PESOS, al: 'right' },
+  { t: 'Desc.', w: 10, fmt: F_PESOS, al: 'right' },
+  { t: 'TOTAL', w: 14, fmt: F_PESOS2, al: 'right' },
+];
+
+/* Pasa las filas del período al formato de la tabla */
+function filasReporte(filas){
+  let dia = '', n = 0;
+  return filas.map(f => {
+    if (f.fecha !== dia){ dia = f.fecha; n = 0; } n++;
+    const tipo = (TIPOS_HORA.find(t => t.id === f.tipoHora) || {}).corto;
+    return {
+      _tipo: f.tipoHora,
+      _fecha: f.fecha,
+      Fecha: n === 1 ? fechaExcel(f.fecha) : null,
+      'N°': n,
+      Funcionario: nombreFunc(f.funcId),
+      Entrada: f.entrada || '',
+      Salida: f.salida || '',
+      'Horas trabajadas': f.horasCalc,
+      'Tipo de hora': tipo,
+      'Área': f.area || '',
+      'Actividad desarrollada': f.actividad + (f.ot ? ' · ' + f.ot : ''),
+      Detalle: f.obs || '',
+      'P.U.': f.pu,
+      'Desc.': f.descuento || null,
+      TOTAL: f.totalCalc,
+    };
+  });
+}
+
+/* Arma una hoja completa del reporte del cliente */
+async function hojaReporteCliente(wb, nombreHoja, c, filas, desde, hasta){
+  const ws = wb.addWorksheet(nombreHoja.slice(0, 28), { properties: { defaultRowHeight: 15 } });
+  const tar = tarifaCliente(c.id, hasta);
+  const cols = COLS_REPORTE.map(x => ({ ...x, k: x.t }));
+
+  const f0 = await encabezadoExcel(wb, ws, {
+    titulo: 'Orden de trabajo', subtitulo: c.relacion || 'RELACIÓN ' + (c.nombre || '').toUpperCase(),
+    anchoCols: cols.length,
+  });
+
+  /* los datos del cliente, a la izquierda; la tarifa, a la derecha */
+  let f = recuadroDatos(ws, f0, [
+    ['CLIENTE:', c.nombre],
+    ['CONTACTO CLIENTE:', rep.contacto || (c.contactos || []).map(k => k.nombre).join(' / ') || '—'],
+    ['PERÍODO:', `${fFecha(desde)}  a  ${fFecha(hasta)}`],
+  ]);
+  const colTar = cols.length - 2;
+  const tt = ws.getCell(f0, colTar);
+  tt.value = 'TARIFA'; tt.fill = relleno(XC.marino);
+  tt.font = { name: FUENTE, size: 9, bold: true, color: { argb: XC.blanco } };
+  tt.alignment = { horizontal: 'center', vertical: 'middle' };
+  ws.mergeCells(f0, colTar, f0, colTar + 1);
+  [['Hora normal', tar.comun], ['Hora extra', tar.extra],
+   ...(filas.some(x => x.tipoHora === 'descanso') ? [['Día de descanso', tar.descanso]] : [])
+  ].forEach(([et, v], i) => {
+    const a = ws.getCell(f0 + 1 + i, colTar), b = ws.getCell(f0 + 1 + i, colTar + 1);
+    a.value = et; b.value = v; b.numFmt = F_PESOS;
+    a.font = { name: FUENTE, size: 9.5, color: { argb: XC.texto } };
+    b.font = { name: FUENTE, size: 9.5, bold: true, color: { argb: XC.marino } };
+    a.border = todoBorde(); b.border = todoBorde();
+    a.fill = relleno(XC.grisClaro); b.fill = relleno(XC.blanco);
+    b.alignment = { horizontal: 'right' };
+  });
+
+  f += 2;
+  const datos = filasReporte(filas);
+  const fin = tablaExcel(ws, f, cols, datos, {
+    congelarCols: 3,
+    /* las horas con recargo quedan pintadas, para que salten a la vista */
+    colorFila: d => d._tipo === 'extra' ? 'FFFDEEDC' : (d._tipo === 'descanso' ? 'FFF6E8F8' : null),
+  });
+
+  /* totales de horas en la columna de horas */
+  const horas = redondear(sumar(filas, x => x.horasCalc));
+  const sub = redondear(sumar(filas, x => x.totalCalc));
+  const iva = redondear(sub * cfg().iva / 100);
+  totalesExcel(ws, fin + 1, cols, { Funcionario: `${new Set(filas.map(x => x.funcId)).size} funcionarios`,
+    'Horas trabajadas': horas, TOTAL: sub }, { rotulo: `${new Set(filas.map(x => x.fecha)).size} días` });
+
+  /* subtotal · IVA · total, bien marcados abajo a la derecha */
+  let fc = fin + 3;
+  fc = cierreExcel(ws, fc, cols.length - 2, cols.length, 'SUBTOTAL', sub, false);
+  fc = cierreExcel(ws, fc, cols.length - 2, cols.length, `IVA ${cfg().iva}%`, iva, false);
+  fc = cierreExcel(ws, fc, cols.length - 2, cols.length, 'TOTAL', redondear(sub + iva), true);
+
+  /* el cuadro por centro de costo, con barras de color adentro de Excel */
+  const cc = {};
+  filas.forEach(x => { const k = x.area || 'Sin área'; cc[k] = redondear((cc[k] || 0) + x.totalCalc); });
+  const lista = Object.entries(cc).sort((a, b) => b[1] - a[1]);
+  let fcc = fin + 3;
+  const c0 = 1;
+  const enc = ['ÍTEM', 'Centro de Costo', '%', 'TOTAL POR C/C'];
+  enc.forEach((t, i) => {
+    const cel = ws.getCell(fcc, c0 + i);
+    cel.value = t;
+    cel.font = { name: FUENTE, size: 9.5, bold: true, color: { argb: XC.blanco } };
+    cel.fill = relleno(XC.azul);
+    cel.alignment = { horizontal: i >= 2 ? 'right' : 'left', vertical: 'middle' };
+    cel.border = todoBorde(XC.azul);
+  });
+  lista.forEach(([k, v], i) => {
+    const r = fcc + 1 + i;
+    const vals = [i + 1, k, sub ? v / sub : 0, v];
+    vals.forEach((val, j) => {
+      const cel = ws.getCell(r, c0 + j);
+      cel.value = val;
+      cel.font = { name: FUENTE, size: 10, color: { argb: XC.texto } };
+      cel.alignment = { horizontal: j === 0 ? 'center' : (j >= 2 ? 'right' : 'left'), vertical: 'middle' };
+      cel.border = todoBorde();
+      cel.fill = relleno(i % 2 ? XC.cebra : XC.blanco);
+      if (j === 2) cel.numFmt = F_PORC;
+      if (j === 3) cel.numFmt = F_PESOS2;
+    });
+  });
+  const rTot = fcc + 1 + lista.length;
+  [['', 'TOTAL', 1, redondear(sumar(lista, x => x[1]))]].forEach(vals => {
+    vals.forEach((val, j) => {
+      const cel = ws.getCell(rTot, c0 + j);
+      cel.value = val === '' ? null : val;
+      cel.font = { name: FUENTE, size: 10.5, bold: true, color: { argb: XC.marino } };
+      cel.fill = relleno(XC.grisClaro);
+      cel.alignment = { horizontal: j >= 2 ? 'right' : 'left', vertical: 'middle' };
+      cel.border = { top: { style: 'medium', color: { argb: XC.azul } }, bottom: borde1(), left: borde1(), right: borde1() };
+      if (j === 2) cel.numFmt = F_PORC;
+      if (j === 3) cel.numFmt = F_PESOS2;
+    });
+  });
+  /* la barrita de color dentro de la celda del porcentaje */
+  if (lista.length) ws.addConditionalFormatting({
+    ref: `${ws.getColumn(c0 + 2).letter}${fcc + 1}:${ws.getColumn(c0 + 2).letter}${fcc + lista.length}`,
+    rules: [{ type: 'dataBar', cfvo: [{ type: 'min' }, { type: 'max' }],
+      color: { argb: XC.azul }, minLength: 0, maxLength: 100, showValue: true }],
+  });
+
+  /* el importe en letras y las firmas */
+  let fp = Math.max(fc, rTot) + 2;
+  fp = notaExcel(ws, fp, `Son ${enLetras(redondear(sub + iva))} pesos uruguayos.`, cols.length);
+  fp += 2;
+  [[2, 'Por ' + cfg().empresa.nombre], [cols.length - 3, 'Por ' + c.nombre]].forEach(([cl, txt]) => {
+    const a = ws.getCell(fp, cl), b = ws.getCell(fp + 1, cl);
+    a.border = { bottom: { style: 'thin', color: { argb: XC.texto } } };
+    ws.mergeCells(fp, cl, fp, cl + 2);
+    b.value = txt;
+    b.font = { name: FUENTE, size: 8.5, color: { argb: XC.gris } };
+    b.alignment = { horizontal: 'center' };
+    ws.mergeCells(fp + 1, cl, fp + 1, cl + 2);
+  });
+  imprimirHoja(ws, f);
+  return ws;
+}
+
+/* El botón «Exportar Excel» del reporte */
+async function repExcel(){
+  if (rep.tipo === 'tareas') return repExcelTareas();
+  if (rep.tipo === 'horas') return repExcelHoras();
+  const filas = repFilas();
+  if (!filas.length) return aviso('No hay nada para exportar con estos filtros', { tipo: 'error' });
+  const c = clienteDe(rep.clienteId);
+  let ExcelJS;
+  try { ExcelJS = await cargarExcelJS(); } catch (e) { return repExcelCSV(filas, c); }
+
+  const wb = new ExcelJS.Workbook();
+  /* una hoja por semana, como la planilla de hoy */
+  const semanas = {};
+  filas.forEach(f => { const k = inicioSemana(f.fecha); (semanas[k] = semanas[k] || []).push(f); });
+  const claves = Object.keys(semanas).sort();
+  for (const k of claves){
+    const nombre = claves.length > 1
+      ? `${fCorta(k).replace('/', '-')} al ${fCorta(sumarDias(k, 6)).replace('/', '-')}` : 'Reporte';
+    await hojaReporteCliente(wb, nombre, c, semanas[k], k, sumarDias(k, 6));
+  }
+  if (claves.length > 1) await hojaReporteCliente(wb, 'TOTAL', c, filas, rep.desde, rep.hasta);
+  await bajarLibro(wb, `Reporte ${c.nombre}${rep.contacto ? ' - ' + rep.contacto : ''}`);
+}
+
+/* Sin internet: el mismo contenido en un .csv */
+function repExcelCSV(filas, c){
+  const tar = tarifaCliente(rep.clienteId, rep.hasta);
+  const datos = [['ORDEN DE TRABAJO:', c.relacion || ''], [],
+    ['CLIENTE:', c.nombre, '', 'Tarifa', 'H. normal', tar.comun],
+    ['CONTACTO:', rep.contacto || '', '', '', 'H. extra', tar.extra],
+    ['PERÍODO:', fFecha(rep.desde), 'a', fFecha(rep.hasta)], [],
+    COLS_REPORTE.map(x => x.t)];
+  filasReporte(filas).forEach(d => datos.push(COLS_REPORTE.map(x =>
+    x.t === 'Fecha' ? (d.Fecha ? fFecha(d._fecha) : '') : (d[x.t] ?? ''))));
+  const sub = redondear(sumar(filas, f => f.totalCalc));
+  datos.push([], ['', '', '', '', '', '', '', '', '', '', '', 'SUBTOTAL', sub],
+    ['', '', '', '', '', '', '', '', '', '', '', `IVA ${cfg().iva}%`, redondear(sub * cfg().iva / 100)],
+    ['', '', '', '', '', '', '', '', '', '', '', 'TOTAL', redondear(sub * (1 + cfg().iva / 100))]);
+  exportarCSV(`Reporte ${c.nombre}`, datos);
+}
+
+/* ---- Trabajos y tareas ---- */
+async function repExcelTareas(){
+  const partes = repPartes();
+  if (!partes.length) return aviso('No hay nada para exportar', { tipo: 'error' });
+  const g = {};
+  partes.forEach(p => { const k = p.actividad || 'Sin descripción'; (g[k] = g[k] || []).push(p); });
+  const filas = Object.entries(g).map(([k, l]) => ({ k, l, t: totalesDe(l) }))
+    .sort((a, b) => b.t.horas - a.t.horas);
+  await exportarExcel('Trabajos y tareas', [
+    { t: 'Tarea / actividad', w: 44, wrap: true, v: x => x.k },
+    { t: 'Tipo de trabajo', w: 22, v: x => nombreTipo(x.l[0].tipoId) },
+    { t: 'Áreas', w: 24, v: x => [...new Set(x.l.map(p => p.area))].filter(Boolean).join(' · ') },
+    { t: 'Empezó', w: 12, fmt: F_FECHA, al: 'center', v: x => fechaExcel(x.l.map(p => inicioDeParte(p)).sort()[0]) },
+    { t: 'Terminó', w: 12, fmt: F_FECHA, al: 'center', v: x => fechaExcel(x.l.map(p => finDeParte(p)).sort().pop()) },
+    { t: 'Días', w: 7, al: 'center', v: x => new Set(x.l.flatMap(p => diasDeParte(p))).size },
+    { t: 'Quiénes trabajaron', w: 36, wrap: true, v: x => [...new Set(x.l.flatMap(p => (p.filas || []).map(f => nombreFunc(f.funcId))))].join(', ') },
+    { t: 'Horas', w: 11, fmt: F_HORAS, al: 'right', v: x => x.t.horas },
+    { t: 'Subtotal', w: 14, fmt: F_PESOS2, al: 'right', v: x => x.t.subtotal },
+  ], filas, {
+    periodo: `${fFecha(rep.desde)} al ${fFecha(rep.hasta)}`,
+    rotulo: `${filas.length} tarea(s)`,
+    totales: { Horas: redondear(sumar(filas, x => x.t.horas)), Subtotal: redondear(sumar(filas, x => x.t.subtotal)) },
+  });
+}
+
+/* ---- Horas por funcionario ---- */
+async function repExcelHoras(){
+  const fl = filasEntre(rep.desde, rep.hasta, f => f.clienteId === rep.clienteId && rep.incluir.includes(f.estado));
+  if (!fl.length) return aviso('No hay nada para exportar', { tipo: 'error' });
+  const g = {};
+  fl.forEach(f => { (g[f.funcId] = g[f.funcId] || []).push(f); });
+  const filas = Object.entries(g).map(([id, l]) => ({ id, l }))
+    .sort((a, b) => sumar(b.l, f => f.horasCalc) - sumar(a.l, f => f.horasCalc));
+  const hs = (l, t) => redondear(sumar(t ? l.filter(f => f.tipoHora === t) : l, f => f.horasCalc));
+  await exportarExcel('Horas por funcionario', [
+    { t: 'Funcionario', w: 22, v: x => nombreFunc(x.id) },
+    { t: 'Especialidad', w: 16, v: x => (funcDe(x.id) || {}).especialidad || '' },
+    { t: 'Comunes', w: 11, fmt: F_HORAS, al: 'right', v: x => hs(x.l, 'comun') },
+    { t: 'Extra', w: 10, fmt: F_HORAS, al: 'right', v: x => hs(x.l, 'extra') },
+    { t: 'Descanso', w: 11, fmt: F_HORAS, al: 'right', v: x => hs(x.l, 'descanso') },
+    { t: 'Total de horas', w: 13, fmt: F_HORAS, al: 'right', v: x => hs(x.l) },
+    { t: 'Días', w: 7, al: 'center', v: x => new Set(x.l.map(f => f.fecha)).size },
+    { t: 'Dónde trabajó', w: 34, wrap: true, v: x => [...new Set(x.l.map(f => f.area).filter(Boolean))].join(' · ') },
+    { t: 'Facturado', w: 15, fmt: F_PESOS2, al: 'right', v: x => redondear(sumar(x.l, f => f.totalCalc)) },
+  ], filas, {
+    periodo: `${fFecha(rep.desde)} al ${fFecha(rep.hasta)}`,
+    rotulo: `${filas.length} funcionario(s)`,
+    totales: { 'Total de horas': redondear(sumar(fl, f => f.horasCalc)),
+      Facturado: redondear(sumar(fl, f => f.totalCalc)) },
+  });
+}
+
+/* ---- Finanzas: el mes ---- */
+async function finExcel(){
+  const m = finanzasMes(finMes);
+  const filas = [
+    ...m.cobros.map(c => ({ t: 'Entró', fecha: c.fechaCobro, det: `${nombreCliente(c.clienteId)} · ${c.concepto}`,
+      doc: c.factura || '', cat: 'Cobro de factura', medio: c.medio || '', entro: c.total, salio: null })),
+    ...m.pagos.map(g => ({ t: 'Salió', fecha: g.fechaPago, det: `${g.proveedorId ? nombreProv(g.proveedorId) + ' · ' : ''}${g.concepto}`,
+      doc: g.factura || '', cat: g.categoria, medio: g.medio || '', entro: null, salio: g.total })),
+  ].sort((a, b) => a.fecha < b.fecha ? -1 : 1);
+  if (!filas.length) return aviso('No hay movimientos en este mes', { tipo: 'error' });
+  await exportarExcel(`Finanzas ${fMes(finMes)}`, [
+    { t: 'Fecha', w: 12, fmt: F_FECHA, al: 'center', v: x => fechaExcel(x.fecha) },
+    { t: 'Movimiento', w: 11, al: 'center', v: x => x.t },
+    { t: 'Detalle', w: 46, wrap: true, v: x => x.det },
+    { t: 'Comprobante', w: 14, v: x => x.doc },
+    { t: 'Categoría', w: 24, v: x => x.cat },
+    { t: 'Medio', w: 15, v: x => x.medio },
+    { t: 'Entró', w: 15, fmt: F_PESOS2, al: 'right', v: x => x.entro },
+    { t: 'Salió', w: 15, fmt: F_PESOS2, al: 'right', v: x => x.salio },
+  ], filas, {
+    periodo: fMes(finMes), rotulo: `${filas.length} movimiento(s)`,
+    totales: { Entró: m.entro, Salió: m.salio, Medio: 'RESULTADO ' + pesos(m.resultado) },
+  });
+}
+
+/* ---- Finanzas: los gastos del mes ---- */
+async function finExcelGastos(){
+  const d = finMes + '-01', h = finMes + '-31';
+  const l = gastosEntre(d, h);
+  if (!l.length) return aviso('No hay gastos en este mes', { tipo: 'error' });
+  await exportarExcel(`Gastos ${fMes(finMes)}`, [
+    { t: 'Fecha', w: 12, fmt: F_FECHA, al: 'center', v: g => fechaExcel(g.fecha) },
+    { t: 'Proveedor', w: 26, v: g => g.proveedorId ? nombreProv(g.proveedorId) : '—' },
+    { t: 'Concepto', w: 40, wrap: true, v: g => g.concepto },
+    { t: 'Categoría', w: 24, v: g => g.categoria },
+    { t: 'Factura', w: 14, v: g => g.factura },
+    { t: 'Subtotal', w: 14, fmt: F_PESOS2, al: 'right', v: g => g.subtotal },
+    { t: 'IVA', w: 13, fmt: F_PESOS2, al: 'right', v: g => g.iva || null },
+    { t: 'Total', w: 15, fmt: F_PESOS2, al: 'right', v: g => g.total },
+    { t: 'Vence', w: 12, fmt: F_FECHA, al: 'center', v: g => fechaExcel(g.vence) },
+    { t: 'Estado', w: 17, al: 'center', v: g => (ESTADOS_GASTO.find(e => e.id === estadoGasto(g)) || {}).nombre },
+    { t: 'Pagado el', w: 12, fmt: F_FECHA, al: 'center', v: g => g.fechaPago ? fechaExcel(g.fechaPago) : null },
+  ], l, {
+    periodo: fMes(finMes), rotulo: `${l.length} comprobante(s)`,
+    totales: { Subtotal: redondear(sumar(l, g => g.subtotal)), IVA: redondear(sumar(l, g => g.iva)),
+      Total: redondear(sumar(l, g => g.total)) },
+  });
+}
+
+/* ---- El estado de cuenta de un cliente o de un proveedor ---- */
+async function exportarCuenta(tipo, id){
+  const esCliente = tipo === 'factura';
+  const c = esCliente ? cuentaCliente(id) : cuentaProveedor(id);
+  if (!c.movs.length) return aviso('No hay movimientos para exportar', { tipo: 'error' });
+  const quien = esCliente ? nombreCliente(id) : nombreProv(id);
+  await exportarExcel(`Estado de cuenta - ${quien}`, [
+    { t: 'Fecha', w: 12, fmt: F_FECHA, al: 'center', v: m => fechaExcel(m.fecha) },
+    { t: 'Comprobante', w: 16, v: m => m.doc },
+    { t: 'Detalle', w: 50, wrap: true, v: m => m.detalle },
+    { t: 'Vence', w: 12, fmt: F_FECHA, al: 'center', v: m => m.vence ? fechaExcel(m.vence) : null },
+    { t: esCliente ? 'Facturado' : 'Comprado', w: 15, fmt: F_PESOS2, al: 'right', v: m => m.debe || null },
+    { t: esCliente ? 'Cobrado' : 'Pagado', w: 15, fmt: F_PESOS2, al: 'right', v: m => m.haber || null },
+    { t: 'Saldo', w: 16, fmt: F_PESOS2, al: 'right', v: m => m.saldo },
+  ], c.movs, {
+    periodo: `Todo el historial · al ${fFecha(hoy())}`,
+    rotulo: `${c.movs.length} movimiento(s)`,
+    totales: { [esCliente ? 'Facturado' : 'Comprado']: esCliente ? c.facturado : c.comprado,
+      [esCliente ? 'Cobrado' : 'Pagado']: esCliente ? c.cobrado : c.pagado, Saldo: c.saldo },
+  });
 }
 
 
@@ -5205,6 +5948,465 @@ function cambiarTema(){
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (temaElegido() === 'auto') aplicarTema();
 });
+
+
+/* ===== js/21-finanzas.js ===== */
+/* =====================================================================
+   FINANZAS
+   La plata que entra y la que sale. Las facturas cobradas vienen solas de
+   Cobros (no se cargan dos veces) y acá se registran las compras y gastos.
+   ===================================================================== */
+let finMes = '';
+const filtroGas = { categoria: '', proveedorId: '', estado: '', q: '' };
+
+function vistaFinanzas(sub){
+  if (!finMes) finMes = mesDe(hoy());
+  const tab = sub || 'resumen';
+  subSeccion.finanzas = tab;
+  const n = gastos(g => estadoGasto(g) === 'vencido').length;
+  return `
+  ${pestanas([
+    { id: 'resumen', t: 'Resumen' },
+    { id: 'ingresos', t: 'Ingresos' },
+    { id: 'gastos', t: 'Gastos', n: n || '' },
+  ], tab, 'finIr')}
+  ${tab === 'resumen' ? finResumen() : tab === 'ingresos' ? finIngresos() : finGastos()}`;
+}
+function finIr(t){ irA('finanzas', t); }
+function finCambiarMes(d){ finMes = mesDe(sumarMeses(finMes + '-01', d)); pintarVista(); }
+function finBarraMes(extra){
+  return `<div class="barra-filtros">
+    <div class="filtros-izq"><div class="periodo">
+      <button class="icon-btn borde" onclick="finCambiarMes(-1)" aria-label="Mes anterior">${ico('izq')}</button>
+      <b>${fMes(finMes)}</b>
+      <button class="icon-btn borde" onclick="finCambiarMes(1)" aria-label="Mes siguiente">${ico('der')}</button>
+    </div></div>
+    <div class="filtros-der">${extra || ''}</div>
+  </div>`;
+}
+
+/* ================= RESUMEN ================= */
+function finResumen(){
+  const m = finanzasMes(finMes);
+  const meses = finanzasUltimos(6);
+  const max = Math.max(...meses.flatMap(x => [x.entro, x.salio]), 1);
+  const cats = Object.entries(m.porCat).sort((a, b) => b[1] - a[1]);
+  const totCat = sumar(cats, c => c[1]) || 1;
+  return `${finBarraMes(`<button class="btn btn-linea" onclick="finExcel()">${ico('excel')} Exportar el mes</button>`)}
+  <div class="kpis">
+    <div class="kpi k-ok"><span class="kpi-t">${ico('cobros')} Entró en el mes</span>
+      <span class="kpi-v">${pesos(m.entro)}</span><small>${m.cobros.length} cobro(s)</small></div>
+    <div class="kpi k-critico"><span class="kpi-t">${ico('plata')} Salió en el mes</span>
+      <span class="kpi-v">${pesos(m.salio)}</span><small>${m.pagos.length} pago(s)</small></div>
+    <div class="kpi ${m.resultado >= 0 ? 'k-ok' : 'k-critico'}"><span class="kpi-t">${ico('grafico')} Resultado</span>
+      <span class="kpi-v">${pesos(m.resultado)}</span>
+      <small>${m.entro ? Math.round(m.resultado / m.entro * 100) : 0}% de lo que entró</small></div>
+    <div class="kpi k-alerta"><span class="kpi-t">${ico('alerta')} Falta pagar</span>
+      <span class="kpi-v">${pesos(aPagar())}</span>
+      <small>${vencidoProv() ? `<span class="txt-critico">${pesos(vencidoProv())} vencido</span>` : 'Nada vencido'}</small></div>
+  </div>
+
+  <details class="mas-numeros">
+    <summary>${ico('abajo')} Ver el IVA del mes</summary>
+    <div class="kpis k3">
+      <div class="kpi chico"><span class="kpi-t">IVA de ventas</span><span class="kpi-v">${pesos(m.ivaVentas)}</span>
+        <small>de ${pesos(m.facturado)} facturados</small></div>
+      <div class="kpi chico"><span class="kpi-t">IVA de compras</span><span class="kpi-v">${pesos(m.ivaCompras)}</span>
+        <small>de ${pesos(m.comprado)} comprados</small></div>
+      <div class="kpi chico ${m.ivaVentas - m.ivaCompras >= 0 ? 'k-alerta' : 'k-ok'}">
+        <span class="kpi-t">Diferencia</span><span class="kpi-v">${pesos(m.ivaVentas - m.ivaCompras)}</span>
+        <small>orientativo, lo confirma tu contador</small></div>
+    </div>
+  </details>
+
+  <div class="grilla-2">
+    <div class="panel ancho2">
+      <div class="panel-cab"><h2>${ico('grafico')} Los últimos 6 meses</h2>
+        <div class="leyenda"><span><i class="l-com"></i>Entró</span><span><i class="l-ext"></i>Salió</span></div></div>
+      <div class="grafico">${meses.map(x => `
+        <div class="g-col ${x.mes === mesDe(hoy()) ? 'actual' : ''}" title="${fMes(x.mes)}: entró ${pesos(x.entro)} · salió ${pesos(x.salio)}">
+          <span class="g-total ${x.resultado >= 0 ? 'txt-ok' : 'txt-critico'}">${x.resultado >= 0 ? '+' : ''}${Math.round(x.resultado / 1000)}k</span>
+          <div class="g-par">
+            <div class="g-barra g-mini" style="height:${(x.entro / max * 100).toFixed(1)}%"><i class="g-com" style="flex:1"></i></div>
+            <div class="g-barra g-mini" style="height:${(x.salio / max * 100).toFixed(1)}%"><i class="g-ext" style="flex:1"></i></div>
+          </div>
+          <span class="g-pie">${fMesCorto(x.mes)}</span>
+        </div>`).join('')}</div>
+    </div>
+
+    <div class="panel"><div class="panel-cab"><h2>${ico('plata')} En qué se fue la plata</h2></div>
+      ${cats.length ? cats.map(([k, v]) => `<div class="fila-prop">
+          <span>${esc(k)}</span>
+          <span class="bb"><i style="width:${(v / totCat * 100).toFixed(1)}%"></i></span>
+          <span class="pp">${Math.round(v / totCat * 100)}%</span>
+          <b>${pesos(v)}</b></div>`).join('') : vacio('No se pagó nada en este mes.')}</div>
+
+    <div class="panel"><div class="panel-cab"><h2>${ico('cobros')} Lo que entró</h2>
+        <button class="btn btn-linea chico" onclick="irA('finanzas','ingresos')">Ver todo ${ico('flecha')}</button></div>
+      ${m.cobros.length ? `<ul class="lista-simple">${m.cobros.slice(0, 8).map(c => `<li>
+          <span><b>${esc(nombreCliente(c.clienteId))}</b><small>${fFecha(c.fechaCobro)} · ${esc(c.medio || '')}</small></span>
+          <b class="txt-ok">${pesos(c.total)}</b></li>`).join('')}</ul>`
+        : vacio('Todavía no se cobró nada este mes.')}</div>
+  </div>`;
+}
+
+/* ================= INGRESOS ================= */
+function finIngresos(){
+  const d = finMes + '-01', h = finMes + '-31';
+  const cobrados = cobrosDe(c => c.estado === 'cobrado' && (c.fechaCobro || '') >= d && (c.fechaCobro || '') <= h);
+  const pendientes = cobrosDe(c => estadoCobro(c) !== 'cobrado');
+  return `${finBarraMes(`<button class="btn btn-linea" onclick="irA('cobros')">${ico('cobros')} Ir a Cobros</button>`)}
+  <div class="nota-aviso info">${ico('alerta')}<div>Acá van <b>las facturas que ya se cobraron</b>: pasan solas desde
+    Cobros cuando las marcás como cobradas, así no se carga nada dos veces.</div></div>
+  <div class="kpis k3">
+    <div class="kpi k-ok"><span class="kpi-t">Cobrado en ${fMesCorto(finMes)}</span>
+      <span class="kpi-v">${pesos(sumar(cobrados, c => c.total))}</span><small>${cobrados.length} factura(s)</small></div>
+    <div class="kpi k-alerta"><span class="kpi-t">Pendiente de cobro</span>
+      <span class="kpi-v">${pesos(porCobrar())}</span><small>${pendientes.length} documento(s)</small></div>
+    <div class="kpi ${vencido() ? 'k-critico' : 'k-ok'}"><span class="kpi-t">Vencido</span>
+      <span class="kpi-v">${pesos(vencido())}</span><small>&nbsp;</small></div>
+  </div>
+  <div class="panel sin-pad"><div class="tabla-resp"><table class="tabla clicable">
+    <thead><tr><th>Cobrado el</th><th>Cliente</th><th class="solo-compu">Concepto</th><th class="solo-compu">Factura</th>
+      <th>Medio</th><th class="num">Subtotal</th><th class="num solo-compu">IVA</th><th class="num">Total</th></tr></thead>
+    <tbody>${cobrados.length ? cobrados.map(c => `<tr onclick="fichaCobro('${c.id}')">
+      <td>${fFecha(c.fechaCobro)}</td>
+      <td><b>${esc(nombreCliente(c.clienteId))}</b><small>${esc(c.contacto || '')}</small></td>
+      <td class="solo-compu">${esc(c.concepto)}</td>
+      <td class="solo-compu mono">${esc(c.factura || '—')}</td>
+      <td>${esc(c.medio || '—')}</td>
+      <td class="num">${pesos(c.subtotal)}</td>
+      <td class="num solo-compu">${pesos(c.iva)}</td>
+      <td class="num"><b class="txt-ok">${pesos(c.total)}</b></td></tr>`).join('')
+      : `<tr><td colspan="8">${vacio('No se cobró nada en este mes.')}</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="5">Total cobrado</td>
+      <td class="num">${pesos(sumar(cobrados, c => c.subtotal))}</td>
+      <td class="num solo-compu">${pesos(sumar(cobrados, c => c.iva))}</td>
+      <td class="num">${pesos(sumar(cobrados, c => c.total))}</td></tr></tfoot>
+  </table></div></div>`;
+}
+
+/* ================= GASTOS ================= */
+function finGastos(){
+  const d = finMes + '-01', h = finMes + '-31';
+  const q = sinTildes(filtroGas.q);
+  const l = gastosEntre(d, h, g =>
+    (!filtroGas.categoria || g.categoria === filtroGas.categoria) &&
+    (!filtroGas.proveedorId || g.proveedorId === filtroGas.proveedorId) &&
+    (!filtroGas.estado || estadoGasto(g) === filtroGas.estado) &&
+    (!q || sinTildes(`${g.concepto} ${g.factura} ${nombreProv(g.proveedorId)}`).includes(q)));
+  const tot = { sub: sumar(l, g => g.subtotal), iva: sumar(l, g => g.iva), total: sumar(l, g => g.total) };
+  const pagadoMes = sumar(pagadoEntre(d, h), g => g.total);
+  return `${finBarraMes(`
+    <button class="btn btn-linea" onclick="finExcelGastos()">${ico('excel')} Exportar</button>
+    <button class="btn btn-naranja" onclick="editarGasto()">${ico('mas')} Registrar gasto</button>`)}
+  <div class="kpis k3">
+    <div class="kpi"><span class="kpi-t">Comprado en ${fMesCorto(finMes)}</span><span class="kpi-v">${pesos(tot.total)}</span>
+      <small>${l.length} comprobante(s)</small></div>
+    <div class="kpi k-critico"><span class="kpi-t">Pagado en el mes</span><span class="kpi-v">${pesos(pagadoMes)}</span>
+      <small>la plata que salió</small></div>
+    <div class="kpi k-alerta"><span class="kpi-t">Falta pagar (en total)</span><span class="kpi-v">${pesos(aPagar())}</span>
+      <small>${vencidoProv() ? `<span class="txt-critico">${pesos(vencidoProv())} vencido</span>` : 'Nada vencido'}</small></div>
+  </div>
+  <div class="barra-filtros">
+    <div class="filtros-izq">
+      <select onchange="gasFiltro('categoria',this.value)" aria-label="Categoría">
+        ${opciones(categoriasGasto(), filtroGas.categoria, 'Todas las categorías')}</select>
+      <select onchange="gasFiltro('proveedorId',this.value)" aria-label="Proveedor" class="solo-compu">
+        ${opciones(Store.listar('proveedores').map(p => ({ v: p.id, t: p.nombre })), filtroGas.proveedorId, 'Todos los proveedores')}</select>
+      <select onchange="gasFiltro('estado',this.value)" aria-label="Estado">
+        ${opciones(ESTADOS_GASTO.map(e => ({ v: e.id, t: e.nombre })), filtroGas.estado, 'Todos los estados')}</select>
+    </div>
+    <div class="filtros-der">
+      <input class="input-busq" type="search" placeholder="Buscar concepto o factura…" value="${esc(filtroGas.q)}"
+        oninput="filtroGas.q=this.value; pintarVista()" aria-label="Buscar"></div>
+  </div>
+  <div class="panel sin-pad"><div class="tabla-resp"><table class="tabla clicable">
+    <thead><tr><th>Fecha</th><th>Proveedor / concepto</th><th class="solo-compu">Categoría</th>
+      <th class="solo-compu">Factura</th><th class="num">Subtotal</th><th class="num solo-compu">IVA</th>
+      <th class="num">Total</th><th>Vence</th><th>Estado</th><th></th></tr></thead>
+    <tbody>${l.length ? l.map(g => `<tr onclick="editarGasto('${g.id}')">
+      <td>${fCorta(g.fecha)}</td>
+      <td><b>${esc(g.proveedorId ? nombreProv(g.proveedorId) : g.concepto)}</b>
+        ${g.proveedorId ? `<small>${esc(g.concepto)}</small>` : ''}</td>
+      <td class="solo-compu">${esc(g.categoria)}</td>
+      <td class="solo-compu mono">${esc(g.factura || '—')}</td>
+      <td class="num">${pesos(g.subtotal)}</td>
+      <td class="num solo-compu">${g.iva ? pesos(g.iva) : '—'}</td>
+      <td class="num"><b>${pesos(g.total)}</b></td>
+      <td>${fCorta(g.vence)}</td>
+      <td>${etqGasto(g)}</td>
+      <td class="acc">${estadoGasto(g) !== 'pagado'
+        ? `<button class="btn btn-linea chico" onclick="event.stopPropagation(); marcarPagado('${g.id}')">${ico('check')} Pagado</button>`
+        : ico('flecha')}</td></tr>`).join('')
+      : `<tr><td colspan="10">${vacio('No hay gastos con estos filtros.',
+          `<button class="btn btn-naranja" onclick="editarGasto()">${ico('mas')} Registrar el primero</button>`)}</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="4">${l.length} comprobante(s)</td>
+      <td class="num">${pesos(tot.sub)}</td><td class="num solo-compu">${pesos(tot.iva)}</td>
+      <td class="num">${pesos(tot.total)}</td><td colspan="3"></td></tr></tfoot>
+  </table></div></div>`;
+}
+function gasFiltro(k, v){ filtroGas[k] = v; pintarVista(); }
+
+/* ---------- Alta y edición de un gasto ---------- */
+function editarGasto(id){
+  const g = id ? Store.obtener('gastos', id) : null;
+  abrirModal(() => ({
+    ancho: 'md', titulo: g ? 'Editar el gasto' : 'Registrar un gasto',
+    sub: g ? `${esc(g.proveedorId ? nombreProv(g.proveedorId) : 'Sin proveedor')} · ${etqGasto(g)}` : 'Una compra o un gasto de la empresa',
+    cuerpo: `<div id="eg-caja" class="grilla-campos">
+      ${campo('Proveedor', `<select name="proveedorId" onchange="gasVence()">
+        ${opciones(Store.listar('proveedores').map(p => ({ v: p.id, t: p.nombre })), g ? g.proveedorId : '', 'Sin proveedor')}</select>`)}
+      ${campo('Categoría', `<input name="categoria" list="eg-cats" class="con-lista" value="${esc(g ? g.categoria : '')}" placeholder="Ej.: Materiales e insumos">
+        <datalist id="eg-cats">${categoriasGasto().map(c => `<option value="${esc(c)}"></option>`).join('')}</datalist>`)}
+      ${campo('Concepto', `<input name="concepto" value="${esc(g ? g.concepto : '')}" autofocus placeholder="Qué se compró">`, 'ancho')}
+      ${campo('Fecha de la factura', `<input type="date" name="fecha" value="${g ? g.fecha : hoy()}" onchange="gasVence()">`)}
+      ${campo('N° de factura', `<input name="factura" value="${esc(g ? g.factura : '')}">`)}
+      ${campo('Vence', `<input type="date" name="vence" value="${g ? g.vence : hoy()}">`)}
+      ${campo('Subtotal (sin IVA)', `<input type="number" name="subtotal" min="0" step="1" value="${g ? g.subtotal : ''}" oninput="gasTotal()">`)}
+      ${campo('¿Lleva IVA?', `<select name="llevaIva" onchange="gasTotal()">
+        ${opciones([{ v: 'si', t: `Sí, ${cfg().iva}%` }, { v: 'no', t: 'No (BPS, DGI, sueldos…)' }], g ? (g.iva ? 'si' : 'no') : 'si')}</select>`)}
+      ${campo('IVA', `<input type="number" name="iva" value="${g ? g.iva : 0}" readonly>`)}
+      ${campo('Total', `<input type="number" name="total" value="${g ? g.total : 0}" readonly>`)}
+      ${campo('Nota', `<input name="nota" value="${esc(g ? g.nota : '')}" placeholder="Opcional">`, 'ancho')}
+    </div>`,
+    pie: `${g ? masOpciones([{ ico: 'basura', t: 'Borrar el gasto', js: `borrarGasto('${g.id}')` }]) : ''}
+      <span class="flex1"></span>
+      <button class="btn btn-linea" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn btn-azul" onclick="guardarGasto(${g ? `'${g.id}'` : 'null'})">${ico('check')} Guardar</button>`,
+    alAbrir: gasTotal,
+  }));
+}
+/* El IVA y el total salen solos del subtotal */
+function gasTotal(){
+  const caja = $('#eg-caja'); if (!caja) return;
+  const sub = Number((caja.querySelector('[name=subtotal]') || {}).value) || 0;
+  const lleva = (caja.querySelector('[name=llevaIva]') || {}).value === 'si';
+  const iva = lleva ? Math.round(sub * cfg().iva / 100) : 0;
+  caja.querySelector('[name=iva]').value = iva;
+  caja.querySelector('[name=total]').value = sub + iva;
+}
+/* Al elegir proveedor, el vencimiento se sugiere con sus días de pago */
+function gasVence(){
+  const caja = $('#eg-caja'); if (!caja) return;
+  const p = provDe(caja.querySelector('[name=proveedorId]').value);
+  const f = caja.querySelector('[name=fecha]').value || hoy();
+  caja.querySelector('[name=vence]').value = p ? sumarDias(f, Number(p.diasPago) || 0) : f;
+}
+function guardarGasto(id){
+  const d = leerForm('#eg-caja');
+  if (!d.concepto) return marcarError('concepto', 'Escribí qué se compró.');
+  if (!d.subtotal) return marcarError('subtotal', 'Poné el importe.');
+  if (!d.categoria) d.categoria = 'Otros';
+  const datos = { proveedorId: d.proveedorId, categoria: d.categoria, concepto: d.concepto,
+    fecha: d.fecha, factura: d.factura, vence: d.vence || d.fecha,
+    subtotal: Number(d.subtotal), iva: Number(d.iva) || 0, total: Number(d.total) || Number(d.subtotal),
+    nota: d.nota };
+  if (id) Store.editar('gastos', id, datos, `Editó el gasto ${d.concepto}`);
+  else Store.crear('gastos', { ...datos, estado: 'pendiente', fechaPago: '', medio: '' },
+    `Nuevo gasto: ${d.concepto} por ${pesos(datos.total)}`);
+  cerrarModal(); aviso('Gasto guardado');
+}
+function marcarPagado(id){
+  const g = Store.obtener('gastos', id);
+  abrirModal(() => ({
+    ancho: 'sm', titulo: 'Marcar como pagado',
+    sub: `${esc(g.proveedorId ? nombreProv(g.proveedorId) : g.concepto)} · ${pesos(g.total)}`,
+    cuerpo: `<div id="mp-caja" class="grilla-campos">
+      ${campo('Fecha del pago', `<input type="date" name="fechaPago" value="${hoy()}" autofocus>`)}
+      ${campo('Medio', `<select name="medio">${opciones(MEDIOS_COBRO, 'Transferencia')}</select>`)}
+    </div>`,
+    pie: `<button class="btn btn-linea" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn btn-naranja" onclick="guardarPagado('${id}')">${ico('check')} Pagado</button>`,
+  }));
+}
+function guardarPagado(id){
+  const d = leerForm('#mp-caja');
+  const g = Store.obtener('gastos', id);
+  Store.editar('gastos', id, { estado: 'pagado', ...d },
+    `Pagó ${pesos(g.total)} a ${g.proveedorId ? nombreProv(g.proveedorId) : g.concepto}`);
+  cerrarTodo(); aviso('Pago registrado');
+}
+async function borrarGasto(id){
+  const g = Store.obtener('gastos', id);
+  if (!await confirmar({ titulo: '¿Borrar el gasto?', texto: `${esc(g.concepto)} por ${pesos(g.total)}.`, si: 'Borrar', peligro: true })) return;
+  const copia = { ...g };
+  Store.borrar('gastos', id, `Borró el gasto ${g.concepto}`);
+  cerrarTodo();
+  aviso('Gasto borrado', { tipo: 'alerta', deshacer: () => { Store.crear('gastos', copia); pintarVista(); } });
+}
+
+
+/* ===== js/22-proveedores.js ===== */
+/* =====================================================================
+   PROVEEDORES  +  ESTADOS DE CUENTA
+   La pestaña «Clientes y proveedores» tiene dos subpestañas. Los clientes
+   están en 12-clientes.js; acá van los proveedores y los dos estados de
+   cuenta (cliente y proveedor), que se arman igual: debe, haber y saldo.
+   ===================================================================== */
+
+/* ---------- La lista de proveedores ---------- */
+function vistaProveedores(){
+  const l = Store.listar('proveedores').sort((a, b) => a.nombre > b.nombre ? 1 : -1);
+  const conSaldo = l.filter(p => saldoProveedor(p.id) > 0);
+  return `
+  <div class="kpis k3">
+    <div class="kpi"><span class="kpi-t">${ico('clientes')} Proveedores</span><span class="kpi-v">${l.length}</span>
+      <small>${conSaldo.length} con saldo</small></div>
+    <div class="kpi k-alerta"><span class="kpi-t">${ico('plata')} Falta pagar</span>
+      <span class="kpi-v">${pesos(aPagar())}</span><small>en total</small></div>
+    <div class="kpi ${vencidoProv() ? 'k-critico' : 'k-ok'}"><span class="kpi-t">${ico('alerta')} Vencido</span>
+      <span class="kpi-v">${pesos(vencidoProv())}</span>
+      <small>${gastos(g => estadoGasto(g) === 'vencido').length} comprobante(s)</small></div>
+  </div>
+  <div class="barra-filtros">
+    <div class="filtros-izq"><span class="suave">Lo que le compramos a cada uno y lo que le debemos</span></div>
+    <div class="filtros-der"><button class="btn btn-azul" onclick="editarProveedor()">${ico('mas')} Nuevo proveedor</button></div>
+  </div>
+  <div class="panel sin-pad"><div class="tabla-resp"><table class="tabla clicable">
+    <thead><tr><th>Proveedor</th><th class="solo-compu">Rubro</th><th class="solo-compu">RUT</th>
+      <th class="solo-compu">Teléfono</th><th class="cen">Días de pago</th>
+      <th class="num">Comprado</th><th class="num">Saldo</th><th></th></tr></thead>
+    <tbody>${l.length ? l.map(p => { const c = cuentaProveedor(p.id);
+      return `<tr onclick="fichaProveedor('${p.id}')">
+        <td><b>${esc(p.nombre)}</b></td>
+        <td class="solo-compu">${esc(p.rubro || '—')}</td>
+        <td class="solo-compu mono">${esc(p.rut || '—')}</td>
+        <td class="solo-compu">${esc(p.telefono || '—')}</td>
+        <td class="cen">${p.diasPago ? p.diasPago + ' días' : 'Contado'}</td>
+        <td class="num">${pesos(c.comprado)}</td>
+        <td class="num"><b class="${c.saldo > 0 ? 'txt-alerta' : 'txt-ok'}">${pesos(c.saldo)}</b></td>
+        <td class="acc">${ico('flecha')}</td></tr>`; }).join('')
+      : `<tr><td colspan="8">${vacio('Todavía no hay proveedores cargados.',
+          `<button class="btn btn-azul" onclick="editarProveedor()">${ico('mas')} Agregar el primero</button>`)}</td></tr>`}</tbody>
+    <tfoot><tr><td colspan="5">Total</td>
+      <td class="num">${pesos(sumar(l, p => cuentaProveedor(p.id).comprado))}</td>
+      <td class="num">${pesos(sumar(l, p => cuentaProveedor(p.id).saldo))}</td><td></td></tr></tfoot>
+  </table></div></div>`;
+}
+
+/* ---------- Ficha del proveedor ---------- */
+let fpTab = 'cuenta';
+function fichaProveedor(id){
+  const p = provDe(id); if (!p) return;
+  abrirModal(() => {
+    const c = cuentaProveedor(id);
+    const compras = gastos(g => g.proveedorId === id);
+    return {
+      ancho: 'lg', titulo: esc(p.nombre),
+      sub: `${esc(p.rubro || '')} · RUT ${esc(p.rut || '—')} · ${p.diasPago ? p.diasPago + ' días de pago' : 'contado'}`,
+      cuerpo: `
+        <div class="kpis k3">
+          <div class="kpi chico"><span class="kpi-t">Comprado en total</span><span class="kpi-v">${pesos(c.comprado)}</span>
+            <small>${compras.length} comprobante(s)</small></div>
+          <div class="kpi chico"><span class="kpi-t">Pagado</span><span class="kpi-v">${pesos(c.pagado)}</span><small>&nbsp;</small></div>
+          <div class="kpi chico ${c.saldo > 0 ? 'k-alerta' : 'k-ok'}"><span class="kpi-t">Saldo a pagar</span>
+            <span class="kpi-v">${pesos(c.saldo)}</span>
+            <small>${gastos(g => g.proveedorId === id && estadoGasto(g) === 'vencido').length} vencido(s)</small></div>
+        </div>
+        ${pestanas([{ id: 'cuenta', t: 'Estado de cuenta' }, { id: 'compras', t: 'Compras', n: compras.length },
+                    { id: 'datos', t: 'Datos' }], fpTab, 'fpIr')}
+        ${fpTab === 'cuenta' ? tablaCuenta(c, 'compra', id)
+        : fpTab === 'compras' ? fpCompras(compras)
+        : fpDatos(p)}`,
+      pie: `<button class="btn btn-linea" onclick="editarProveedor('${id}')">${ico('lapiz')} Editar</button>
+        <span class="flex1"></span>
+        <button class="btn btn-linea" onclick="cerrarModal()">Cerrar</button>
+        <button class="btn btn-azul" onclick="cerrarModal(); editarGasto()">${ico('mas')} Registrar compra</button>`,
+    };
+  });
+}
+function fpIr(t){ fpTab = t; refrescarModal(); }
+function fpCompras(l){
+  if (!l.length) return vacio('Todavía no hay compras a este proveedor.');
+  return `<div class="tabla-resp"><table class="tabla compacta clicable">
+    <thead><tr><th>Fecha</th><th>Concepto</th><th class="solo-compu">Categoría</th><th class="num">Total</th><th>Estado</th></tr></thead>
+    <tbody>${l.map(g => `<tr onclick="cerrarModal(); editarGasto('${g.id}')">
+      <td>${fCorta(g.fecha)}<small>${esc(g.factura || '')}</small></td>
+      <td>${esc(g.concepto)}</td><td class="solo-compu">${esc(g.categoria)}</td>
+      <td class="num"><b>${pesos(g.total)}</b></td><td>${etqGasto(g)}</td></tr>`).join('')}</tbody>
+  </table></div>`;
+}
+function fpDatos(p){
+  return `<dl class="dl">
+    <dt>Razón social</dt><dd>${esc(p.razon || p.nombre)}</dd>
+    <dt>RUT</dt><dd class="mono">${esc(p.rut || '—')}</dd>
+    <dt>Rubro</dt><dd>${esc(p.rubro || '—')}</dd>
+    <dt>Contacto</dt><dd>${esc(p.contacto || '—')}</dd>
+    <dt>Teléfono</dt><dd>${esc(p.telefono || '—')}</dd>
+    <dt>Correo</dt><dd>${esc(p.email || '—')}</dd>
+    <dt>Días de pago</dt><dd>${p.diasPago ? p.diasPago + ' días' : 'Contado'}</dd>
+  </dl>`;
+}
+
+/* ---------- El estado de cuenta, igual para los dos ----------
+   Debe (lo que se facturó o compró) · Haber (lo que se cobró o pagó) · Saldo corriendo. */
+function tablaCuenta(c, tipo, id){
+  if (!c.movs.length) return vacio('Todavía no hay movimientos.');
+  const esCliente = tipo === 'factura';
+  return `<div class="tabla-resp"><table class="tabla compacta">
+    <thead><tr><th>Fecha</th><th>Comprobante</th><th>Detalle</th>
+      <th class="num">${esCliente ? 'Facturado' : 'Comprado'}</th>
+      <th class="num">${esCliente ? 'Cobrado' : 'Pagado'}</th>
+      <th class="num">Saldo</th></tr></thead>
+    <tbody>${c.movs.map(m => `<tr class="${m.estado === 'vencido' ? 'fila-mal' : ''}">
+      <td>${fFecha(m.fecha)}</td>
+      <td>${m.tipo === 'factura' || m.tipo === 'compra'
+        ? `<span class="etq info">${esc(m.doc)}</span>` : `<span class="etq ok">${esc(m.doc)}</span>`}</td>
+      <td>${esc(m.detalle)}${m.vence ? `<small>vence ${fCorta(m.vence)}</small>` : ''}</td>
+      <td class="num">${m.debe ? pesos(m.debe) : ''}</td>
+      <td class="num">${m.haber ? pesos(m.haber) : ''}</td>
+      <td class="num"><b>${pesos(m.saldo)}</b></td></tr>`).join('')}</tbody>
+    <tfoot><tr><td colspan="3">Saldo al ${fFecha(hoy())}</td>
+      <td class="num">${pesos(esCliente ? c.facturado : c.comprado)}</td>
+      <td class="num">${pesos(esCliente ? c.cobrado : c.pagado)}</td>
+      <td class="num">${pesos(c.saldo)}</td></tr></tfoot>
+  </table></div>
+  <div class="botonera derecha">
+    <button class="btn btn-linea chico" onclick="exportarCuenta('${tipo}','${id || ''}')">${ico('excel')} Exportar el estado de cuenta</button>
+  </div>`;
+}
+
+/* ---------- Alta y edición de un proveedor ---------- */
+function editarProveedor(id){
+  const p = id ? provDe(id) : null;
+  abrirModal(() => ({
+    ancho: 'md', titulo: p ? 'Editar ' + esc(p.nombre) : 'Nuevo proveedor',
+    cuerpo: `<div id="ep-caja" class="grilla-campos">
+      ${campo('Nombre', `<input name="nombre" value="${esc(p ? p.nombre : '')}" autofocus>`)}
+      ${campo('Razón social', `<input name="razon" value="${esc(p ? p.razon : '')}">`)}
+      ${campo('RUT', `<input name="rut" value="${esc(p ? p.rut : '')}" inputmode="numeric">`)}
+      ${campo('Rubro', `<input name="rubro" value="${esc(p ? p.rubro : '')}" placeholder="Qué nos vende">`)}
+      ${campo('Contacto', `<input name="contacto" value="${esc(p ? p.contacto : '')}">`)}
+      ${campo('Teléfono', `<input name="telefono" value="${esc(p ? p.telefono : '')}" inputmode="tel">`)}
+      ${campo('Correo', `<input name="email" type="email" value="${esc(p ? p.email : '')}">`)}
+      ${campo('Días de pago', `<input type="number" name="diasPago" min="0" value="${p ? (p.diasPago || 0) : 30}">`)}
+    </div>
+    <div class="chico suave">Los días de pago sirven para que el vencimiento de cada compra se calcule solo.</div>`,
+    pie: `${p ? masOpciones([{ ico: 'basura', t: 'Borrar el proveedor', js: `borrarProveedor('${p.id}')` }]) : ''}
+      <span class="flex1"></span>
+      <button class="btn btn-linea" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn btn-azul" onclick="guardarProveedor(${p ? `'${p.id}'` : 'null'})">${ico('check')} Guardar</button>`,
+  }));
+}
+function guardarProveedor(id){
+  const d = leerForm('#ep-caja');
+  if (!d.nombre) return marcarError('nombre', 'Poné el nombre del proveedor.');
+  d.diasPago = Number(d.diasPago) || 0;
+  if (id) Store.editar('proveedores', id, d, `Editó el proveedor ${d.nombre}`);
+  else Store.crear('proveedores', { ...d, activo: true }, `Nuevo proveedor: ${d.nombre}`);
+  cerrarModal(); if (pilaModal.length) refrescarModal();
+  aviso('Proveedor guardado');
+}
+async function borrarProveedor(id){
+  const p = provDe(id);
+  const usado = gastos(g => g.proveedorId === id).length;
+  if (usado) return avisar('No se puede borrar',
+    `«${esc(p.nombre)}» tiene <b>${usado} compra(s)</b> cargadas. Si ya no le comprás, dejalo igual: el historial se pierde si lo borrás.`);
+  if (!await confirmar({ titulo: `¿Borrar «${p.nombre}»?`, texto: 'No tiene compras cargadas.', si: 'Borrar', peligro: true })) return;
+  Store.borrar('proveedores', id, `Borró el proveedor ${p.nombre}`);
+  cerrarTodo(); aviso('Proveedor borrado');
+}
 
 
 /* ===== js/99-app.js ===== */
